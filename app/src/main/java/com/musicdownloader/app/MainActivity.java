@@ -6047,6 +6047,17 @@ private void loadThumbnail(
         spotifySelectionTracks.clear();
         spotifyOfflineSlots.clear();
 
+        Button backToSpotifyLists =
+                visualButton("← VOLVER A LISTAS");
+
+        backToSpotifyLists.setOnClickListener(
+                v -> loadSpotifyLists()
+        );
+
+        contentLayout.addView(
+                backToSpotifyLists
+        );
+
         /*
          * PORTADA DE LA PLAYLIST
          *
