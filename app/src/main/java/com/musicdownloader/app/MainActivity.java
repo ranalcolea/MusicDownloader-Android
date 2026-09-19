@@ -4731,6 +4731,27 @@ private void loadThumbnail(
 
         contentLayout.addView(importButton);
 
+        Button exportifyButton =
+                roundedButton();
+
+        exportifyButton.setText(
+                "🌐 ABRIR EXPORTIFY"
+        );
+
+        exportifyButton.setOnClickListener(
+                v -> {
+                    Intent intent =
+                            new Intent(
+                                    Intent.ACTION_VIEW,
+                                    Uri.parse("https://exportify.net/")
+                            );
+
+                    startActivity(intent);
+                }
+        );
+
+        contentLayout.addView(exportifyButton);
+
         Button fileButton =
                 roundedButton();
 
@@ -4909,6 +4930,30 @@ private void loadThumbnail(
 
         contentLayout.addView(
                 importButton
+        );
+
+
+        Button exportifyButton =
+                roundedButton();
+
+        exportifyButton.setText(
+                "🌐 ABRIR EXPORTIFY"
+        );
+
+        exportifyButton.setOnClickListener(
+                v -> {
+                    Intent intent =
+                            new Intent(
+                                    Intent.ACTION_VIEW,
+                                    Uri.parse("https://exportify.net/")
+                            );
+
+                    startActivity(intent);
+                }
+        );
+
+        contentLayout.addView(
+                exportifyButton
         );
 
 
