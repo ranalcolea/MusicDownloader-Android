@@ -1,0 +1,45 @@
+# Gradle
+.gradle/
+build/
+*/build/
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Configuración local del SDK
+local.properties
+
+# APK / AAB generados
+*.apk
+*.aab
+
+# NDK / CMake
+.externalNativeBuild/
+.cxx/
+
+# Archivos temporales
+*.tmp
+*.temp
+*.log
+
+# Copias de seguridad
+*.bak
+*.bak*
+*.backup
+*.backup*
+*.BAK
+*.BAK*
+*.BACKUP
+*.BACKUP*
+*backup*
+*Backup*
+
+# Backups de iconos / recursos locales
+backup-*/
+
+# Copias antiguas específicas de MainActivity
+MainActivity.java.FALLO-*
+MainActivity.java.PRE-*
