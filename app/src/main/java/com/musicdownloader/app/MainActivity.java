@@ -1,4 +1,7 @@
 package com.musicdownloader.app;
+import android.view.View;
+import android.animation.ValueAnimator;
+import android.animation.ObjectAnimator;
 import android.app.AlertDialog;
 
 import android.content.Intent;
@@ -11,6 +14,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.PowerManager;
 import android.os.Looper;
+import android.view.animation.AlphaAnimation;
+import android.view.animation.Animation;
 import android.view.Gravity;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -37,6 +42,7 @@ import androidx.documentfile.provider.DocumentFile;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.io.InputStream;
@@ -49,12 +55,34 @@ import java.net.URLEncoder;
 
 public class MainActivity extends android.app.Activity {
 
+    /*
+     * Generación de reproducción individual.
+     *
+     * Cada nueva canción/lista individual invalida los
+     * resolvers pendientes de la reproducción anterior.
+     */
+    private volatile long individualPlaybackGeneration = 0;
+
+    private long beginIndividualPlayback() {
+        return ++individualPlaybackGeneration;
+    }
+
+    private boolean isCurrentIndividualPlayback(
+            long generation) {
+
+        return generation ==
+                individualPlaybackGeneration;
+    }
+
+
     private static final int PICK_PLAYLIST_FILE = 9001;
     private static final int PICK_OFFLINE_FOLDER = 9002;
 
     private Uri offlineFolderUri;
 
     private EditText serverInput;
+    private TextView serverStatus;
+    private LinearLayout serverCard;
     private EditText searchInput;
     private LinearLayout contentLayout;
 
@@ -78,8 +106,30 @@ public class MainActivity extends android.app.Activity {
 
     private TextView playerTitle;
     private TextView playerArtist;
+    private TextView playerQueueProgress;
     private ImageView playerArtwork;
     private TextView playerTime;
+
+    /*
+     * Últimos resultados de búsqueda de álbumes.
+     * Se conservan para poder volver desde la ficha del álbum.
+     */
+    private List<ApiClient.Album> lastAlbumSearchResults =
+            new ArrayList<>();
+
+    /*
+     * Estado visual de preparación de cada pista.
+      *
+     * Cada posición de la lista corresponde exactamente
+     * con la tarjeta mostrada en pantalla.
+     */
+    private final List<TextView> albumPreparationStatusViews =
+            new ArrayList<>();
+
+    private final List<TextView> spotifyPreparationStatusViews =
+            new ArrayList<>();
+
+    private volatile long queuePreparationGeneration = 0;
 
     private String playerArtworkLoaded = "";
     private SeekBar playerSeekBar;
@@ -269,7 +319,7 @@ public class MainActivity extends android.app.Activity {
                 visualButton("📱 Offline");
 
         Button downloadsTab =
-                visualButton("📥 Descargas");
+                visualButton("🔗 Conexiones");
 
         LinearLayout.LayoutParams navButtonParams =
                 new LinearLayout.LayoutParams(
@@ -338,26 +388,403 @@ public class MainActivity extends android.app.Activity {
                 )
         );
 
-        root.addView(serverInput);
+        /*
+         * ============================================================
+         * SERVIDOR
+         * ============================================================
+         */
+
+        serverCard =
+                new LinearLayout(this);
+
+        serverCard.setOrientation(
+                LinearLayout.VERTICAL
+        );
+
+        serverCard.setPadding(
+                dp(11),
+                dp(6),
+                dp(11),
+                dp(5)
+        );
+
+        serverCard.setBackground(
+                roundedBackground(
+                        Color.rgb(25, 25, 32),
+                        Color.rgb(70, 70, 85),
+                        20
+                )
+        );
+
+        serverCard.setElevation(
+                dp(6)
+        );
+
+        LinearLayout.LayoutParams serverCardParams =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        -2
+                );
+
+        serverCardParams.setMargins(
+                dp(8),
+                dp(2),
+                dp(8),
+                dp(4)
+        );
+
+        TextView serverTitle =
+                new TextView(this);
+
+        serverTitle.setText(
+                "🖥  SERVIDOR"
+        );
+
+        serverTitle.setTextSize(13);
+
+        serverTitle.setTypeface(
+                android.graphics.Typeface.DEFAULT,
+                android.graphics.Typeface.BOLD
+        );
+
+        serverTitle.setTextColor(
+                Color.rgb(145, 145, 255)
+        );
+
+        serverCard.addView(
+                serverTitle
+        );
+
+        TextView serverDescription =
+                new TextView(this);
+
+        serverDescription.setText(
+                "Conecta la aplicación con tu servidor Music Downloader"
+        );
+
+        serverDescription.setTextSize(13);
+
+        serverDescription.setTextColor(
+                Color.rgb(135, 135, 145)
+        );
+
+        LinearLayout.LayoutParams descriptionParams =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        -2
+                );
+
+        descriptionParams.setMargins(
+                0,
+                0,
+                0,
+                dp(3)
+        );
+
+        serverCard.addView(
+                serverDescription,
+                descriptionParams
+        );
+
+        serverInput.setTextColor(
+                Color.WHITE
+        );
+
+        serverInput.setHintTextColor(
+                Color.rgb(120, 120, 130)
+        );
+
+        serverInput.setTextSize(15);
+
+        serverInput.setPadding(
+                dp(14),
+                0,
+                dp(14),
+                0
+        );
+
+        serverInput.setBackground(
+                roundedBackground(
+                        Color.rgb(18, 18, 24),
+                        Color.rgb(75, 75, 92),
+                        14
+                )
+        );
+
+        serverCard.addView(
+                serverInput,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(38)
+                )
+        );
+
+        LinearLayout statusRow =
+                new LinearLayout(this);
+
+        statusRow.setOrientation(
+                LinearLayout.HORIZONTAL
+        );
+
+        statusRow.setGravity(
+                Gravity.CENTER_VERTICAL
+        );
+
+        serverStatus =
+                new TextView(this);
+
+        android.content.SharedPreferences serverPrefs =
+                getSharedPreferences(
+                        "settings",
+                        MODE_PRIVATE
+                );
+
+        String checkedServer =
+                serverPrefs.getString(
+                        "server_checked_url",
+                        ""
+                );
+
+        boolean serverWasChecked =
+                serverPrefs.getBoolean(
+                        "server_checked",
+                        false
+                );
+
+        boolean serverWasConnected =
+                serverPrefs.getBoolean(
+                        "server_connected",
+                        false
+                );
+
+        String currentServer =
+                serverInput
+                        .getText()
+                        .toString()
+                        .trim();
+
+        if (
+                serverWasChecked &&
+                serverWasConnected &&
+                currentServer.equals(checkedServer)
+        ) {
+
+            serverStatus.setText(
+                    "🟢 Conectado"
+            );
+
+            serverStatus.setTextColor(
+                    Color.rgb(55, 215, 125)
+            );
+
+        } else if (
+                serverWasChecked &&
+                !serverWasConnected &&
+                currentServer.equals(checkedServer)
+        ) {
+
+            serverStatus.setText(
+                    "🔴 Sin conexión"
+            );
+
+            serverStatus.setTextColor(
+                    Color.rgb(255, 90, 100)
+            );
+
+        } else {
+
+            serverStatus.setText(
+                    "⚪ Sin comprobar"
+            );
+
+            serverStatus.setTextColor(
+                    Color.rgb(145, 145, 155)
+            );
+        }
+
+        serverStatus.setTextSize(13);
+
+        LinearLayout.LayoutParams statusParams =
+                new LinearLayout.LayoutParams(
+                        0,
+                        -2,
+                        1
+                );
+
+        statusParams.setMargins(
+                0,
+                dp(2),
+                0,
+                0
+        );
+
+        statusRow.addView(
+                serverStatus,
+                statusParams
+        );
+
+        Button checkServer =
+                roundedButton();
+
+        checkServer.setText(
+                "↻ Comprobar"
+        );
+
+        checkServer.setTextSize(12);
+
+        LinearLayout.LayoutParams checkParams =
+                new LinearLayout.LayoutParams(
+                        -2,
+                        dp(34)
+                );
+
+        checkParams.setMargins(
+                dp(4),
+                dp(1),
+                0,
+                0
+        );
+
+        statusRow.addView(
+                checkServer,
+                checkParams
+        );
 
         Button saveServer =
                 roundedButton();
 
         saveServer.setText(
-                "Guardar servidor"
+                "✓ Guardar"
+        );
+
+        saveServer.setTextSize(12);
+
+        LinearLayout.LayoutParams saveParams =
+                new LinearLayout.LayoutParams(
+                        -2,
+                        dp(34)
+                );
+
+        saveParams.setMargins(
+                dp(4),
+                dp(1),
+                0,
+                0
+        );
+
+        statusRow.addView(
+                saveServer,
+                saveParams
+        );
+
+        serverCard.addView(
+                statusRow
+        );
+
+        checkServer.setOnClickListener(
+                v -> checkServerConnection()
         );
 
         saveServer.setOnClickListener(
                 v -> saveServerUrl()
         );
 
-        root.addView(saveServer);
+        /*
+         * ============================================================
+         * BUSCADOR
+         * ============================================================
+         */
 
-        LinearLayout searchRow =
+        LinearLayout searchCard =
                 new LinearLayout(this);
 
-        searchRow.setOrientation(
-                LinearLayout.HORIZONTAL
+        searchCard.setOrientation(
+                LinearLayout.VERTICAL
+        );
+
+        searchCard.setPadding(
+                dp(11),
+                dp(6),
+                dp(11),
+                dp(5)
+        );
+
+        searchCard.setBackground(
+                roundedBackground(
+                        Color.rgb(25, 25, 32),
+                        Color.rgb(70, 70, 85),
+                        dp(20)
+                )
+        );
+
+        searchCard.setElevation(
+                dp(7)
+        );
+
+        LinearLayout.LayoutParams searchCardParams =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        -2
+                );
+
+        searchCardParams.setMargins(
+                dp(8),
+                dp(2),
+                dp(8),
+                dp(4)
+        );
+
+        TextView searchTitle =
+                new TextView(this);
+
+        searchTitle.setText(
+                "BUSCAR MÚSICA"
+        );
+
+        searchTitle.setTextSize(13);
+
+        searchTitle.setTypeface(
+                android.graphics.Typeface.DEFAULT,
+                android.graphics.Typeface.BOLD
+        );
+
+        searchTitle.setTextColor(
+                Color.rgb(145, 105, 255)
+        );
+
+        searchCard.addView(
+                searchTitle
+        );
+
+        TextView searchDescription =
+                new TextView(this);
+
+        searchDescription.setText(
+                "Encuentra canciones, artistas y álbumes"
+        );
+
+        searchDescription.setTextSize(12);
+
+        searchDescription.setTextColor(
+                Color.rgb(135, 135, 145)
+        );
+
+        LinearLayout.LayoutParams searchDescriptionParams =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        -2
+                );
+
+        searchDescriptionParams.setMargins(
+                0,
+                0,
+                0,
+                dp(3)
+        );
+
+        searchCard.addView(
+                searchDescription,
+                searchDescriptionParams
         );
 
         searchInput =
@@ -374,15 +801,15 @@ public class MainActivity extends android.app.Activity {
         );
 
         searchInput.setHintTextColor(
-                Color.rgb(145, 145, 155)
+                Color.rgb(120, 120, 130)
         );
 
-        searchInput.setTextSize(15);
+        searchInput.setTextSize(16);
 
         searchInput.setPadding(
-                dp(14),
+                dp(16),
                 0,
-                dp(14),
+                dp(16),
                 0
         );
 
@@ -399,36 +826,23 @@ public class MainActivity extends android.app.Activity {
 
         searchInput.setBackground(
                 roundedBackground(
-                        Color.rgb(28, 28, 34),
-                        Color.rgb(85, 85, 98),
-                        18
+                        Color.rgb(17, 17, 23),
+                        Color.rgb(80, 80, 98),
+                        dp(16)
                 )
         );
 
         searchInput.setElevation(
-                dp(4)
+                dp(3)
         );
 
-        LinearLayout.LayoutParams searchInputParams =
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(52),
-                        1
-                );
-
-        searchInputParams.setMargins(
-                0,
-                dp(4),
-                dp(8),
-                dp(4)
-        );
-
-        searchRow.addView(
+        searchCard.addView(
                 searchInput,
-                searchInputParams
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(56)
+                )
         );
-
-        root.addView(searchRow);
 
         LinearLayout modeRow =
                 new LinearLayout(this);
@@ -437,47 +851,150 @@ public class MainActivity extends android.app.Activity {
                 LinearLayout.HORIZONTAL
         );
 
+        modeRow.setGravity(
+                Gravity.CENTER
+        );
+
+        LinearLayout.LayoutParams modeRowParams =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(50)
+                );
+
+        modeRowParams.setMargins(
+                0,
+                dp(4),
+                0,
+                0
+        );
+
         Button songsButton =
-                roundedButton();
+                new Button(this);
 
         songsButton.setText(
-                "🎵 Canciones"
+                "🎵  Canciones"
+        );
+
+        songsButton.setTextSize(14);
+
+        songsButton.setTextColor(
+                Color.WHITE
+        );
+
+        songsButton.setAllCaps(false);
+
+        songsButton.setTypeface(
+                android.graphics.Typeface.DEFAULT,
+                android.graphics.Typeface.BOLD
+        );
+
+        songsButton.setGravity(
+                Gravity.CENTER
+        );
+
+        songsButton.setBackground(
+                roundedBackground(
+                        Color.rgb(38, 32, 55),
+                        Color.rgb(105, 82, 165),
+                        dp(14)
+                )
+        );
+
+        songsButton.setElevation(
+                dp(4)
         );
 
         songsButton.setOnClickListener(
                 v -> searchSongs()
         );
 
-        modeRow.addView(
-                songsButton,
+        LinearLayout.LayoutParams songsParams =
                 new LinearLayout.LayoutParams(
                         0,
-                        -2,
+                        dp(39),
                         1
-                )
+                );
+
+        songsParams.setMargins(
+                0,
+                0,
+                dp(5),
+                0
+        );
+
+        modeRow.addView(
+                songsButton,
+                songsParams
         );
 
         Button albumsButton =
-                roundedButton();
+                new Button(this);
 
         albumsButton.setText(
-                "💿 Álbumes"
+                "💿  Álbumes"
+        );
+
+        albumsButton.setTextSize(14);
+
+        albumsButton.setTextColor(
+                Color.WHITE
+        );
+
+        albumsButton.setAllCaps(false);
+
+        albumsButton.setTypeface(
+                android.graphics.Typeface.DEFAULT,
+                android.graphics.Typeface.BOLD
+        );
+
+        albumsButton.setGravity(
+                Gravity.CENTER
+        );
+
+        albumsButton.setBackground(
+                roundedBackground(
+                        Color.rgb(30, 30, 38),
+                        Color.rgb(75, 75, 90),
+                        dp(14)
+                )
+        );
+
+        albumsButton.setElevation(
+                dp(4)
         );
 
         albumsButton.setOnClickListener(
                 v -> searchAlbums()
         );
 
-        modeRow.addView(
-                albumsButton,
+        LinearLayout.LayoutParams albumsParams =
                 new LinearLayout.LayoutParams(
                         0,
-                        -2,
+                        dp(39),
                         1
-                )
+                );
+
+        albumsParams.setMargins(
+                dp(5),
+                0,
+                0,
+                0
         );
 
-        root.addView(modeRow);
+        modeRow.addView(
+                albumsButton,
+                albumsParams
+        );
+
+        searchCard.addView(
+                modeRow,
+                modeRowParams
+        );
+
+        root.addView(
+                searchCard,
+                searchCardParams
+        );
 
         /*
          * MINI PLAYER FLOTANTE
@@ -957,6 +1474,74 @@ public class MainActivity extends android.app.Activity {
         );
 
         /*
+         * CONTADOR DE PREPARACIÓN DE COLA
+         *
+         * Indica canciones resueltas/cargadas:
+         *
+         * 1/23
+         * 2/23
+         * ...
+         * 23/23
+         */
+
+        playerQueueProgress =
+                new TextView(this);
+
+        playerQueueProgress.setText(
+                "0/0"
+        );
+
+        playerQueueProgress.setTextSize(
+                12
+        );
+
+        playerQueueProgress.setTextColor(
+                Color.LTGRAY
+        );
+
+        playerQueueProgress.setTypeface(
+                null,
+                android.graphics.Typeface.BOLD
+        );
+
+        playerQueueProgress.setGravity(
+                Gravity.CENTER
+        );
+
+        playerQueueProgress.setTextAlignment(
+                android.view.View.TEXT_ALIGNMENT_CENTER
+        );
+
+        playerQueueProgress.setPadding(
+                0,
+                0,
+                0,
+                dp(2)
+        );
+
+        playerQueueProgress.setVisibility(
+                android.view.View.GONE
+        );
+
+        LinearLayout.LayoutParams queueProgressParams =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(40)
+                );
+
+        queueProgressParams.setMargins(
+                0,
+                0,
+                0,
+                dp(2)
+        );
+
+        player.addView(
+                playerQueueProgress,
+                queueProgressParams
+        );
+
+        /*
          * BARRA DE PROGRESO
          */
 
@@ -1369,6 +1954,10 @@ public class MainActivity extends android.app.Activity {
             ScrollView targetScroll,
             boolean home) {
 
+        if (targetLayout != downloadsTabLayout) {
+            restoreServerCardToRoot();
+        }
+
         if (contentFrame == null ||
                 targetLayout == null ||
                 targetScroll == null) {
@@ -1415,6 +2004,16 @@ public class MainActivity extends android.app.Activity {
          */
         contentLayout = targetLayout;
 
+    // La tarjeta SERVIDOR solo debe ser visible dentro de DESCARGAS.
+    if (serverCard != null) {
+        serverCard.setVisibility(
+                targetLayout == downloadsTabLayout
+                        ? android.view.View.VISIBLE
+                        : android.view.View.GONE
+        );
+    }
+
+
         if (home) {
 
             for (int i = 0;
@@ -1438,6 +2037,11 @@ public class MainActivity extends android.app.Activity {
 
             hideMainHome();
         }
+    }
+
+    private void restoreServerCardToRoot() {
+        // La tarjeta SERVIDOR pertenece exclusivamente a DESCARGAS.
+        // No se devuelve nunca al root principal.
     }
 
     private void showMainHome() {
@@ -1609,6 +2213,14 @@ public class MainActivity extends android.app.Activity {
                 !url.startsWith("https://")
         ) {
 
+            serverStatus.setText(
+                    "🔴 URL no válida"
+            );
+
+            serverStatus.setTextColor(
+                    Color.rgb(255, 90, 100)
+            );
+
             Toast.makeText(
                     this,
                     "URL no válida",
@@ -1619,6 +2231,7 @@ public class MainActivity extends android.app.Activity {
         }
 
         while (url.endsWith("/")) {
+
             url =
                     url.substring(
                             0,
@@ -1639,11 +2252,140 @@ public class MainActivity extends android.app.Activity {
                 )
                 .apply();
 
-        Toast.makeText(
-                this,
-                "Servidor guardado",
-                Toast.LENGTH_SHORT
-        ).show();
+        checkServerConnection();
+    }
+
+    private void checkServerConnection() {
+
+        String url =
+                serverInput
+                        .getText()
+                        .toString()
+                        .trim();
+
+        if (
+                !url.startsWith("http://") &&
+                !url.startsWith("https://")
+        ) {
+
+            serverStatus.setText(
+                    "🔴 URL no válida"
+            );
+
+            serverStatus.setTextColor(
+                    Color.rgb(255, 90, 100)
+            );
+
+            return;
+        }
+
+        while (url.endsWith("/")) {
+
+            url =
+                    url.substring(
+                            0,
+                            url.length() - 1
+                    );
+        }
+
+        final String serverUrl =
+                url;
+
+        serverStatus.setText(
+                "🟡 Comprobando..."
+        );
+
+        serverStatus.setTextColor(
+                Color.rgb(235, 190, 70)
+        );
+
+        executor.execute(() -> {
+
+            boolean connected = false;
+
+            try {
+
+                java.net.URL testUrl =
+                        new java.net.URL(
+                                serverUrl + "/"
+                        );
+
+                java.net.HttpURLConnection connection =
+                        (java.net.HttpURLConnection)
+                                testUrl.openConnection();
+
+                connection.setRequestMethod(
+                        "GET"
+                );
+
+                connection.setConnectTimeout(
+                        5000
+                );
+
+                connection.setReadTimeout(
+                        5000
+                );
+
+                int code =
+                        connection.getResponseCode();
+
+                connected =
+                        code >= 200 &&
+                        code < 500;
+
+                connection.disconnect();
+
+            } catch (Exception ignored) {
+
+                connected = false;
+            }
+
+            final boolean result =
+                    connected;
+
+            getSharedPreferences(
+                    "settings",
+                    MODE_PRIVATE
+            )
+                    .edit()
+                    .putString(
+                            "server_checked_url",
+                            serverUrl
+                    )
+                    .putBoolean(
+                            "server_checked",
+                            true
+                    )
+                    .putBoolean(
+                            "server_connected",
+                            result
+                    )
+                    .apply();
+
+            handler.post(() -> {
+
+                if (result) {
+
+                    serverStatus.setText(
+                            "🟢 Conectado"
+                    );
+
+                    serverStatus.setTextColor(
+                            Color.rgb(55, 215, 125)
+                    );
+
+                } else {
+
+                    serverStatus.setText(
+                            "🔴 Sin conexión"
+                    );
+
+                    serverStatus.setTextColor(
+                            Color.rgb(255, 90, 100)
+                    );
+                }
+            });
+        });
     }
 
     private ApiClient api() {
@@ -1686,14 +2428,10 @@ public class MainActivity extends android.app.Activity {
 
         contentLayout.removeAllViews();
 
-        TextView loading =
-                new TextView(this);
-
-        loading.setText(
-                "Buscando canciones..."
-        );
-
-        loading.setTextSize(18);
+        LinearLayout loading =
+                createSearchLoading(
+                        "Buscando canciones"
+                );
 
         contentLayout.addView(loading);
 
@@ -1718,6 +2456,223 @@ public class MainActivity extends android.app.Activity {
                 );
             }
         });
+    }
+
+    private LinearLayout createSearchLoading(
+            String message) {
+
+        LinearLayout container =
+                new LinearLayout(this);
+
+        container.setOrientation(
+                LinearLayout.VERTICAL
+        );
+
+        container.setGravity(
+                Gravity.CENTER
+        );
+
+        container.setPadding(
+                dp(20),
+                dp(70),
+                dp(20),
+                dp(70)
+        );
+
+        /*
+         * ECUALIZADOR ANIMADO
+         */
+
+        LinearLayout visualizer =
+                new LinearLayout(this);
+
+        visualizer.setOrientation(
+                LinearLayout.HORIZONTAL
+        );
+
+        visualizer.setGravity(
+                Gravity.CENTER
+        );
+
+        int[] heights = {
+                22, 42, 30, 54, 34,
+                46, 26
+        };
+
+        for (int height : heights) {
+
+            View bar =
+                    new View(this);
+
+            GradientDrawable background =
+                    new GradientDrawable();
+
+            background.setColor(
+                    Color.rgb(145, 105, 255)
+            );
+
+            background.setCornerRadius(
+                    dp(8)
+            );
+
+            bar.setBackground(background);
+
+            LinearLayout.LayoutParams params =
+                    new LinearLayout.LayoutParams(
+                            dp(7),
+                            dp(height)
+                    );
+
+            params.setMargins(
+                    dp(4),
+                    0,
+                    dp(4),
+                    0
+            );
+
+            visualizer.addView(
+                    bar,
+                    params
+            );
+
+            ObjectAnimator animator =
+                    ObjectAnimator.ofFloat(
+                            bar,
+                            "scaleY",
+                            0.35f,
+                            1.0f,
+                            0.45f,
+                            0.85f,
+                            0.35f
+                    );
+
+            animator.setDuration(
+                    900 + (height * 7L)
+            );
+
+            animator.setRepeatCount(
+                    ValueAnimator.INFINITE
+            );
+
+            animator.setRepeatMode(
+                    ValueAnimator.REVERSE
+            );
+
+            animator.setStartDelay(
+                    visualizer.getChildCount() * 90L
+            );
+
+            animator.start();
+        }
+
+        container.addView(
+                visualizer,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(70)
+                )
+        );
+
+        /*
+         * TEXTO
+         */
+
+        TextView loadingText =
+                new TextView(this);
+
+        loadingText.setText(message);
+
+        loadingText.setTextSize(17);
+
+        loadingText.setTypeface(
+                android.graphics.Typeface.DEFAULT,
+                android.graphics.Typeface.BOLD
+        );
+
+        loadingText.setTextColor(
+                Color.rgb(205, 205, 215)
+        );
+
+        loadingText.setGravity(
+                Gravity.CENTER
+        );
+
+        LinearLayout.LayoutParams textParams =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        -2
+                );
+
+        textParams.setMargins(
+                0,
+                dp(18),
+                0,
+                0
+        );
+
+        container.addView(
+                loadingText,
+                textParams
+        );
+
+        /*
+         * SUBTÍTULO SUTIL
+         */
+
+        TextView subtitle =
+                new TextView(this);
+
+        subtitle.setText(
+                "Preparando resultados..."
+        );
+
+        subtitle.setTextSize(13);
+
+        subtitle.setTextColor(
+                Color.rgb(125, 125, 140)
+        );
+
+        subtitle.setGravity(
+                Gravity.CENTER
+        );
+
+        LinearLayout.LayoutParams subtitleParams =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        -2
+                );
+
+        subtitleParams.setMargins(
+                0,
+                dp(6),
+                0,
+                0
+        );
+
+        container.addView(
+                subtitle,
+                subtitleParams
+        );
+
+        AlphaAnimation pulse =
+                new AlphaAnimation(
+                        0.45f,
+                        1.0f
+                );
+
+        pulse.setDuration(850);
+
+        pulse.setRepeatMode(
+                Animation.REVERSE
+        );
+
+        pulse.setRepeatCount(
+                Animation.INFINITE
+        );
+
+        subtitle.startAnimation(pulse);
+
+        return container;
     }
 
     private int dp(int value) {
@@ -2839,11 +3794,18 @@ private void loadThumbnail(
                     0
             );
 
+            final int finalSongIndex =
+                    index;
+
+            final List<ApiClient.Song> finalSongs =
+                    songs;
+
             play.setOnClickListener(
-                    v -> playSong(
-                            song.id,
-                            song.title,
-                            song.thumbnail
+                    v -> playSongsQueue(
+                            finalSongs.subList(
+                                    finalSongIndex,
+                                    finalSongs.size()
+                            )
                     )
             );
 
@@ -3182,6 +4144,9 @@ private void loadThumbnail(
             return;
         }
 
+        final long playbackGeneration =
+                beginIndividualPlayback();
+
         Toast.makeText(
                 this,
                 "Preparando primera canción...",
@@ -3254,7 +4219,14 @@ private void loadThumbnail(
                         first.add(item);
 
                         handler.post(
-                                () -> sendQueueToPlayer(first)
+                                () -> {
+                                    if (!isCurrentIndividualPlayback(
+                                            playbackGeneration)) {
+                                        return;
+                                    }
+
+                                    sendQueueToPlayer(first);
+                                }
                         );
 
                     } else {
@@ -3265,7 +4237,14 @@ private void loadThumbnail(
                         next.add(item);
 
                         handler.post(
-                                () -> addItemsToPlayerQueue(next)
+                                () -> {
+                                    if (!isCurrentIndividualPlayback(
+                                            playbackGeneration)) {
+                                        return;
+                                    }
+
+                                    addItemsToPlayerQueue(next);
+                                }
                         );
                     }
 
@@ -3332,14 +4311,10 @@ private void loadThumbnail(
 
         contentLayout.removeAllViews();
 
-        TextView loading =
-                new TextView(this);
-
-        loading.setText(
-                "Buscando álbumes..."
-        );
-
-        loading.setTextSize(18);
+        LinearLayout loading =
+                createSearchLoading(
+                        "Buscando álbumes"
+                );
 
         contentLayout.addView(loading);
 
@@ -3365,6 +4340,11 @@ private void loadThumbnail(
 
     private void showAlbums(
             List<ApiClient.Album> albums) {
+
+        lastAlbumSearchResults =
+                albums == null
+                        ? new ArrayList<>()
+                        : new ArrayList<>(albums);
 
         showMainHome();
 
@@ -3662,6 +4642,63 @@ private void loadThumbnail(
                 dp(16)
         );
 
+        Button backToAlbumsButton =
+                new Button(this);
+
+        backToAlbumsButton.setText(
+                "← VOLVER A ÁLBUMES"
+        );
+
+        backToAlbumsButton.setTextSize(13);
+
+        backToAlbumsButton.setTextColor(
+                Color.WHITE
+        );
+
+        backToAlbumsButton.setAllCaps(false);
+
+        backToAlbumsButton.setBackground(
+                roundedBackground(
+                        Color.rgb(42, 42, 50),
+                        Color.rgb(90, 90, 105),
+                        dp(14)
+                )
+        );
+
+        LinearLayout.LayoutParams backParams =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        dp(44)
+                );
+
+        backParams.setMargins(
+                0,
+                0,
+                0,
+                dp(14)
+        );
+
+        header.addView(
+                backToAlbumsButton,
+                backParams
+        );
+
+        backToAlbumsButton.setOnClickListener(
+                v -> {
+
+                    if (
+                            lastAlbumSearchResults != null &&
+                            !lastAlbumSearchResults.isEmpty()
+                    ) {
+                        showAlbums(
+                                lastAlbumSearchResults
+                        );
+                    } else {
+                        showMainHome();
+                    }
+                }
+        );
+
         ImageView albumCover =
                 new ImageView(this);
 
@@ -3824,16 +4861,23 @@ private void loadThumbnail(
         List<DownloadSlot> offlineAlbumSlots =
                 new ArrayList<>();
 
+        albumPreparationStatusViews.clear();
+
         /*
          * ============================================================
          * CANCIONES DEL ÁLBUM
          * ============================================================
          */
 
+        int albumTrackIndex = 0;
+
         for (
                 ApiClient.Song track :
                 album.tracks
         ) {
+
+            final int currentAlbumTrackIndex =
+                    albumTrackIndex++;
 
             LinearLayout card =
                     new LinearLayout(this);
@@ -3966,6 +5010,17 @@ private void loadThumbnail(
             artist.setMaxLines(2);
 
             info.addView(artist);
+
+            TextView obtainedStatus =
+                    createObtainedStatusView();
+
+            info.addView(
+                    obtainedStatus
+            );
+
+            albumPreparationStatusViews.add(
+                    obtainedStatus
+            );
 
             top.addView(
                     info,
@@ -4242,9 +5297,9 @@ private void loadThumbnail(
              */
 
             play.setOnClickListener(
-                    v -> resolveAndPlayAlbumTrack(
-                            track,
-                            album.id
+                    v -> playAlbumFromIndex(
+                            album,
+                            currentAlbumTrackIndex
                     )
             );
 
@@ -4437,10 +5492,334 @@ private void loadThumbnail(
         mediaController.play();
     }
 
+    private void playAlbumFromIndex(
+            ApiClient.Album album,
+            int startIndex) {
+
+        if (album == null ||
+                album.tracks == null ||
+                album.tracks.isEmpty() ||
+                startIndex < 0 ||
+                startIndex >= album.tracks.size()) {
+            return;
+        }
+
+        final long playbackGeneration =
+                beginIndividualPlayback();
+
+        Toast.makeText(
+                this,
+                "Preparando desde la pista "
+                        + (startIndex + 1)
+                        + "...",
+                Toast.LENGTH_SHORT
+        ).show();
+
+        executor.execute(() -> {
+
+            try {
+                ApiClient.Song firstTrack =
+                        album.tracks.get(startIndex);
+
+                ApiClient.Song firstResolved =
+                        api().resolveAlbumTrack(
+                                firstTrack.artist,
+                                firstTrack.title
+                        );
+
+                if (firstResolved == null ||
+                        firstResolved.id == null ||
+                        firstResolved.id.trim().isEmpty()) {
+                    handler.post(() ->
+                            Toast.makeText(
+                                    this,
+                                    "No se pudo preparar la pista",
+                                    Toast.LENGTH_SHORT
+                            ).show()
+                    );
+                    return;
+                }
+
+                String firstUrl =
+                        api().getPreviewUrl(
+                                firstResolved.id
+                        );
+
+                if (firstUrl == null ||
+                        firstUrl.trim().isEmpty()) {
+                    handler.post(() ->
+                            Toast.makeText(
+                                    this,
+                                    "No se pudo obtener el audio",
+                                    Toast.LENGTH_SHORT
+                            ).show()
+                    );
+                    return;
+                }
+
+                String firstThumbnail =
+                        firstTrack.thumbnail;
+
+                if (firstThumbnail == null ||
+                        firstThumbnail.trim().isEmpty()) {
+                    firstThumbnail =
+                            firstResolved.thumbnail;
+                }
+
+                if ((firstThumbnail == null ||
+                        firstThumbnail.trim().isEmpty()) &&
+                        album.id != null &&
+                        !album.id.trim().isEmpty()) {
+
+                    firstThumbnail =
+                            "https://coverartarchive.org/release-group/"
+                                    + album.id
+                                    + "/front";
+                }
+
+                MediaMetadata.Builder firstMetadata =
+                        new MediaMetadata.Builder()
+                                .setTitle(firstTrack.title)
+                                .setArtist(firstTrack.artist)
+                                .setAlbumTitle(album.title);
+
+                if (firstThumbnail != null &&
+                        !firstThumbnail.trim().isEmpty()) {
+
+                    firstMetadata.setArtworkUri(
+                            Uri.parse(firstThumbnail)
+                    );
+                }
+
+                MediaItem firstItem =
+                        new MediaItem.Builder()
+                                .setUri(firstUrl)
+                                .setMediaMetadata(
+                                        firstMetadata.build()
+                                )
+                                .build();
+
+                List<MediaItem> firstList =
+                        new ArrayList<>();
+
+                firstList.add(firstItem);
+
+                handler.post(() -> {
+
+                    if (!isCurrentIndividualPlayback(
+                            playbackGeneration)) {
+                        return;
+                    }
+
+                    sendQueueToPlayer(firstList);
+                });
+
+                if (startIndex + 1 >= album.tracks.size()) {
+                    return;
+                }
+
+                int remaining =
+                        album.tracks.size()
+                                - startIndex
+                                - 1;
+
+                int threads =
+                        Math.min(
+                                6,
+                                Math.max(2, remaining)
+                        );
+
+                ExecutorService resolver =
+                        Executors.newFixedThreadPool(
+                                threads
+                        );
+
+                java.util.concurrent.ExecutorCompletionService<
+                        java.util.AbstractMap.SimpleEntry<
+                                Integer,
+                                MediaItem
+                        >
+                > completionService =
+                        new java.util.concurrent.ExecutorCompletionService<>(
+                                resolver
+                        );
+
+                int submitted = 0;
+
+                for (
+                        int index = startIndex + 1;
+                        index < album.tracks.size();
+                        index++
+                ) {
+
+                    final int trackIndex = index;
+
+                    completionService.submit(() -> {
+
+                        ApiClient.Song track =
+                                album.tracks.get(trackIndex);
+
+                        ApiClient.Song resolved =
+                                api().resolveAlbumTrack(
+                                        track.artist,
+                                        track.title
+                                );
+
+                        if (resolved == null ||
+                                resolved.id == null ||
+                                resolved.id.trim().isEmpty()) {
+                            return null;
+                        }
+
+                        String url =
+                                api().getPreviewUrl(
+                                        resolved.id
+                                );
+
+                        if (url == null ||
+                                url.trim().isEmpty()) {
+                            return null;
+                        }
+
+                        String thumbnail =
+                                track.thumbnail;
+
+                        if (thumbnail == null ||
+                                thumbnail.trim().isEmpty()) {
+                            thumbnail =
+                                    resolved.thumbnail;
+                        }
+
+                        if ((thumbnail == null ||
+                                thumbnail.trim().isEmpty()) &&
+                                album.id != null &&
+                                !album.id.trim().isEmpty()) {
+
+                            thumbnail =
+                                    "https://coverartarchive.org/release-group/"
+                                            + album.id
+                                            + "/front";
+                        }
+
+                        MediaMetadata.Builder metadata =
+                                new MediaMetadata.Builder()
+                                        .setTitle(track.title)
+                                        .setArtist(track.artist)
+                                        .setAlbumTitle(album.title);
+
+                        if (thumbnail != null &&
+                                !thumbnail.trim().isEmpty()) {
+
+                            metadata.setArtworkUri(
+                                    Uri.parse(thumbnail)
+                            );
+                        }
+
+                        MediaItem item =
+                                new MediaItem.Builder()
+                                        .setUri(url)
+                                        .setMediaMetadata(
+                                                metadata.build()
+                                        )
+                                        .build();
+
+                        return new java.util.AbstractMap.SimpleEntry<>(
+                                trackIndex,
+                                item
+                        );
+                    });
+
+                    submitted++;
+                }
+
+                Map<Integer, MediaItem> ready =
+                        new java.util.HashMap<>();
+
+                int nextIndex = startIndex + 1;
+
+                for (int i = 0; i < submitted; i++) {
+
+                    java.util.concurrent.Future<
+                            java.util.AbstractMap.SimpleEntry<
+                                    Integer,
+                                    MediaItem
+                            >
+                    > future =
+                            completionService.take();
+
+                    java.util.AbstractMap.SimpleEntry<
+                            Integer,
+                            MediaItem
+                    > result =
+                            future.get();
+
+                    if (result == null) {
+                        continue;
+                    }
+
+                    ready.put(
+                            result.getKey(),
+                            result.getValue()
+                    );
+
+                    while (ready.containsKey(nextIndex)) {
+
+                        MediaItem item =
+                                ready.remove(nextIndex);
+
+                        List<MediaItem> next =
+                                new ArrayList<>();
+
+                        next.add(item);
+
+                        final List<MediaItem> itemsToAdd =
+                                next;
+
+                        handler.post(() -> {
+
+                            if (!isCurrentIndividualPlayback(
+                                    playbackGeneration)) {
+                                return;
+                            }
+
+                            addItemsToPlayerQueue(
+                                    itemsToAdd
+                            );
+                        });
+
+                        nextIndex++;
+                    }
+                }
+
+                resolver.shutdown();
+
+            } catch (Exception error) {
+
+                Log.e(
+                        "MUSIC_DOWNLOAD",
+                        "Error preparando álbum",
+                        error
+                );
+            }
+        });
+    }
+
     private void playAlbum(
             ApiClient.Album album) {
 
-        Toast.makeText(
+        
+        final int albumTotal =
+                album != null &&
+                album.tracks != null
+                        ? album.tracks.size()
+                        : 0;
+
+        final long queueGeneration =
+                beginQueuePreparation(
+                        albumTotal
+                );
+
+Toast.makeText(
                 this,
                 "Preparando álbum completo...",
                 Toast.LENGTH_LONG
@@ -4452,11 +5831,15 @@ private void loadThumbnail(
                     new ArrayList<>();
 
             int failed = 0;
+            int preparationTrackIndex = 0;
 
             for (
                     ApiClient.Song track :
                     album.tracks
             ) {
+
+                final int currentPreparationTrackIndex =
+                        preparationTrackIndex++;
 
                 try {
 
@@ -4544,6 +5927,17 @@ private void loadThumbnail(
 
                     items.add(item);
 
+                    updateQueuePreparationProgress(
+                            queueGeneration,
+                            items.size(),
+                            albumTotal
+                    );
+
+                    markAlbumTrackObtained(
+                            queueGeneration,
+                            currentPreparationTrackIndex
+                    );
+
                     /*
                      * La primera canción comienza inmediatamente.
                      * Las siguientes se añaden progresivamente.
@@ -4612,8 +6006,6 @@ private void loadThumbnail(
 
                     return;
                 }
-
-                sendQueueToPlayer(items);
 
                 String message;
 
@@ -6083,6 +7475,77 @@ private void loadThumbnail(
         }
     }
 
+    /*
+     * BOTÓN MODERNO EXCLUSIVO DE SPOTIFY
+     *
+     * No modifica visualButton() ni roundedButton()
+     * porque esos métodos pueden ser utilizados por
+     * otras pantallas de la aplicación.
+     */
+    private Button spotifyModernButton(
+            String text,
+            boolean primary) {
+
+        Button button = new Button(this);
+
+        button.setText(text);
+        button.setSingleLine(true);
+        button.setAllCaps(false);
+        button.setTextSize(primary ? 13 : 12);
+        button.setTypeface(
+                android.graphics.Typeface.DEFAULT,
+                android.graphics.Typeface.BOLD
+        );
+
+        button.setTextColor(
+                primary
+                        ? Color.WHITE
+                        : Color.rgb(215, 215, 225)
+        );
+
+        button.setGravity(Gravity.CENTER);
+
+        button.setPadding(
+                dp(8),
+                0,
+                dp(8),
+                0
+        );
+
+        android.graphics.drawable.GradientDrawable background =
+                new android.graphics.drawable.GradientDrawable();
+
+        background.setColor(
+                primary
+                        ? Color.rgb(38, 42, 48)
+                        : Color.rgb(29, 31, 37)
+        );
+
+        background.setCornerRadius(
+                dp(13)
+        );
+
+        background.setStroke(
+                dp(1),
+                primary
+                        ? Color.rgb(78, 82, 92)
+                        : Color.rgb(55, 58, 68)
+        );
+
+        button.setBackground(background);
+
+        if (android.os.Build.VERSION.SDK_INT >= 21) {
+            button.setElevation(
+                    dp(2)
+            );
+        }
+
+        button.setMinHeight(0);
+        button.setMinimumHeight(0);
+
+        return button;
+    }
+
     private void showSpotifyPlaylist(
             ApiClient.SpotifyPlaylist playlist) {
 
@@ -6093,14 +7556,34 @@ private void loadThumbnail(
         spotifyOfflineSlots.clear();
 
         Button backToSpotifyLists =
-                visualButton("← VOLVER A LISTAS");
+                spotifyModernButton(
+                        "←  Volver a listas",
+                        false
+                );
+
+        backToSpotifyLists.setTextSize(14);
+        backToSpotifyLists.setGravity(Gravity.CENTER);
+
+        LinearLayout.LayoutParams backButtonParams =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(46)
+                );
+
+        backButtonParams.setMargins(
+                dp(4),
+                dp(2),
+                dp(4),
+                dp(8)
+        );
 
         backToSpotifyLists.setOnClickListener(
                 v -> loadSpotifyLists()
         );
 
         contentLayout.addView(
-                backToSpotifyLists
+                backToSpotifyLists,
+                backButtonParams
         );
 
         /*
@@ -6122,8 +7605,8 @@ private void loadThumbnail(
 
         LinearLayout.LayoutParams playlistCoverParams =
                 new LinearLayout.LayoutParams(
-                        dp(190),
-                        dp(190)
+                        dp(204),
+                        dp(204)
                 );
 
         playlistCoverParams.gravity =
@@ -6197,18 +7680,26 @@ private void loadThumbnail(
                 new TextView(this);
 
         heading.setText(
-                "🎧 "
-                        + playlist.name
+                playlist.name
                         + "\n"
                         + playlist.tracks.size()
                         + " canciones"
         );
 
-        heading.setTextSize(22);
+        heading.setTextSize(21);
+        heading.setTypeface(
+                android.graphics.Typeface.DEFAULT,
+                android.graphics.Typeface.BOLD
+        );
         heading.setTextColor(Color.WHITE);
 
         heading.setGravity(
                 Gravity.CENTER
+        );
+
+        heading.setLineSpacing(
+                0f,
+                1.05f
         );
 
         LinearLayout.LayoutParams headingParams =
@@ -6218,10 +7709,10 @@ private void loadThumbnail(
                 );
 
         headingParams.setMargins(
-                0,
+                dp(4),
                 dp(8),
-                0,
-                dp(10)
+                dp(4),
+                dp(12)
         );
 
         contentLayout.addView(
@@ -6230,11 +7721,12 @@ private void loadThumbnail(
         );
 
         Button playAll =
-                roundedButton();
+                spotifyModernButton(
+                        "▶  Reproducir playlist completa",
+                        true
+                );
 
-        playAll.setText(
-                "▶ REPRODUCIR PLAYLIST COMPLETA"
-        );
+
 
         playAll.setOnClickListener(
                 v -> playSpotifyPlaylist(
@@ -6242,29 +7734,38 @@ private void loadThumbnail(
                 )
         );
 
-        contentLayout.addView(playAll);
+        LinearLayout.LayoutParams mainButtonParams =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(46)
+                );
+
+        mainButtonParams.setMargins(
+                dp(4),
+                dp(3),
+                dp(4),
+                dp(5)
+        );
+
+        contentLayout.addView(
+                playAll,
+                mainButtonParams
+        );
 
         Button downloadAll =
-                roundedButton();
+                spotifyModernButton(
+                        "⬇  Descargar seleccionadas",
+                        true
+                );
 
-        downloadAll.setText(
-                "⬇ DESCARGAR SELECCIONADAS"
+
+
+        contentLayout.addView(
+                downloadAll,
+                mainButtonParams
         );
 
-        contentLayout.addView(downloadAll);
 
-        Button exportNew =
-                roundedButton();
-
-        exportNew.setText(
-                "📤 EXPORTAR NUEVA LISTA"
-        );
-
-        exportNew.setOnClickListener(
-                v -> showSpotifyHome()
-        );
-
-        contentLayout.addView(exportNew);
 
         LinearLayout selectionButtons =
                 new LinearLayout(this);
@@ -6291,23 +7792,23 @@ private void loadThumbnail(
         );
 
         Button selectAll =
-                visualButton("☑ Marcar todas");
+                spotifyModernButton("☑  Marcar todas", false);
 
         Button deselectAll =
-                visualButton("☐ Desmarcar");
+                spotifyModernButton("☐  Desmarcar", false);
 
         Button downloadSelected =
-                visualButton("⬇ Seleccionadas Offline");
+                spotifyModernButton("⬇  Seleccionadas Offline", true);
 
         downloadSelected.setSingleLine(true);
         downloadSelected.setTextSize(12);
 
         LinearLayout.LayoutParams selectionButtonParams =
-        new LinearLayout.LayoutParams(
-                0,
-                dp(44),
-                1f
-        );
+                new LinearLayout.LayoutParams(
+                        0,
+                        dp(42),
+                        1f
+                );
 
 selectionButtonParams.setMargins(
         dp(2),
@@ -6369,10 +7870,17 @@ selectionButtons.addView(
         List<DownloadSlot> slots =
                 new ArrayList<>();
 
+        spotifyPreparationStatusViews.clear();
+
+        int spotifyTrackIndex = 0;
+
         for (
                 ApiClient.SpotifyTrack track :
                 playlist.tracks
         ) {
+
+            final int currentSpotifyTrackIndex =
+                    spotifyTrackIndex++;
 
             LinearLayout row =
                     new LinearLayout(this);
@@ -6382,19 +7890,25 @@ selectionButtons.addView(
             );
 
             row.setPadding(
-                    dp(10),
-                    dp(10),
-                    dp(10),
-                    dp(10)
+                    dp(11),
+                    dp(11),
+                    dp(11),
+                    dp(11)
             );
 
             row.setBackground(
                     roundedBackground(
-                            Color.rgb(30, 30, 36),
-                            Color.rgb(65, 65, 75),
-                            18
+                            Color.rgb(25, 27, 32),
+                            Color.rgb(48, 51, 59),
+                            20
                     )
             );
+
+            if (android.os.Build.VERSION.SDK_INT >= 21) {
+                row.setElevation(
+                        dp(2)
+                );
+            }
 
             LinearLayout.LayoutParams rowParams =
                     new LinearLayout.LayoutParams(
@@ -6443,7 +7957,7 @@ selectionButtons.addView(
 
             LinearLayout.LayoutParams selectParams =
                     new LinearLayout.LayoutParams(
-                            dp(38),
+                            dp(34),
                             dp(76)
                     );
 
@@ -6461,14 +7975,14 @@ selectionButtons.addView(
 
             LinearLayout.LayoutParams coverParams =
                     new LinearLayout.LayoutParams(
-                            dp(76),
-                            dp(76)
+                            dp(78),
+                            dp(78)
                     );
 
             coverParams.setMargins(
                     0,
                     0,
-                    dp(12),
+                    dp(13),
                     0
             );
 
@@ -6502,7 +8016,11 @@ selectionButtons.addView(
                     track.title
             );
 
-            title.setTextSize(16);
+            title.setTextSize(15);
+            title.setTypeface(
+                    android.graphics.Typeface.DEFAULT,
+                    android.graphics.Typeface.BOLD
+            );
             title.setTextColor(Color.WHITE);
             title.setMaxLines(2);
 
@@ -6538,9 +8056,9 @@ selectionButtons.addView(
                     new TextView(this);
 
             artist.setText(details);
-            artist.setTextSize(12);
+            artist.setTextSize(11);
             artist.setTextColor(
-                    Color.rgb(175, 175, 185)
+                    Color.rgb(158, 160, 170)
             );
 
             artist.setMaxLines(2);
@@ -6557,7 +8075,7 @@ selectionButtons.addView(
 
             artistParams.setMargins(
                     0,
-                    dp(5),
+                    dp(7),
                     0,
                     0
             );
@@ -6565,6 +8083,17 @@ selectionButtons.addView(
             info.addView(
                     artist,
                     artistParams
+            );
+
+            TextView obtainedStatus =
+                    createObtainedStatusView();
+
+            info.addView(
+                    obtainedStatus
+            );
+
+            spotifyPreparationStatusViews.add(
+                    obtainedStatus
             );
 
             top.addView(
@@ -6597,20 +8126,21 @@ selectionButtons.addView(
 
             buttonsParams.setMargins(
                     0,
-                    dp(10),
+                    dp(11),
                     0,
                     0
             );
 
             Button play =
-                    visualButton(
-                            "▶ Escuchar"
+                    spotifyModernButton(
+                            "▶  Escuchar",
+                            true
                     );
 
             LinearLayout.LayoutParams playParams =
                     new LinearLayout.LayoutParams(
                             0,
-                            dp(44),
+                            dp(40),
                             1f
                     );
 
@@ -6622,7 +8152,10 @@ selectionButtons.addView(
             );
 
             play.setOnClickListener(
-                    v -> playSpotifyTrack(track)
+                    v -> playSpotifyPlaylistFromIndex(
+                            playlist,
+                            currentSpotifyTrackIndex
+                    )
             );
 
             buttons.addView(
@@ -6631,14 +8164,15 @@ selectionButtons.addView(
             );
 
             Button download =
-                    visualButton(
-                            "⬇ Descargar"
+                    spotifyModernButton(
+                            "⬇  Descargar",
+                            false
                     );
 
             LinearLayout.LayoutParams downloadParams =
                     new LinearLayout.LayoutParams(
                             0,
-                            dp(44),
+                            dp(40),
                             1f
                     );
 
@@ -6655,14 +8189,15 @@ selectionButtons.addView(
             );
 
             Button offline =
-                    visualButton(
-                            "📱 Offline"
+                    spotifyModernButton(
+                            "📱  Offline",
+                            false
                     );
 
             LinearLayout.LayoutParams offlineParams =
                     new LinearLayout.LayoutParams(
                             0,
-                            dp(44),
+                            dp(40),
                             1f
                     );
 
@@ -6700,12 +8235,12 @@ selectionButtons.addView(
             LinearLayout.LayoutParams progressParams =
                     new LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT,
-                            dp(5)
+                            dp(3)
                     );
 
             progressParams.setMargins(
                     0,
-                    dp(7),
+                    dp(9),
                     0,
                     0
             );
@@ -6722,9 +8257,9 @@ selectionButtons.addView(
                     "Listo para descargar"
             );
 
-            status.setTextSize(11);
+            status.setTextSize(10);
             status.setTextColor(
-                    Color.rgb(145, 145, 155)
+                    Color.rgb(132, 134, 144)
             );
 
             row.addView(status);
@@ -6765,7 +8300,7 @@ selectionButtons.addView(
             LinearLayout.LayoutParams offlineProgressParams =
                     new LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT,
-                            dp(5)
+                            dp(3)
                     );
 
             offlineProgressParams.setMargins(
@@ -6787,9 +8322,9 @@ selectionButtons.addView(
                     "📱 Listo para guardar offline"
             );
 
-            offlineStatus.setTextSize(11);
+            offlineStatus.setTextSize(10);
             offlineStatus.setTextColor(
-                    Color.rgb(135, 135, 145)
+                    Color.rgb(128, 130, 140)
             );
 
             row.addView(offlineStatus);
@@ -6855,6 +8390,528 @@ selectionButtons.addView(
         );
     }
 
+    private void playSpotifyPlaylistFromIndex(
+            ApiClient.SpotifyPlaylist playlist,
+            int startIndex) {
+        final long playbackGeneration =
+                beginIndividualPlayback();
+
+
+        
+        final int playlistTotal =
+                playlist != null &&
+                playlist.tracks != null
+                        ? playlist.tracks.size()
+                        : 0;
+
+        final long queueGeneration =
+                beginQueuePreparation(
+                        playlistTotal
+                );
+
+if (playlist == null ||
+                playlist.tracks == null ||
+                playlist.tracks.isEmpty() ||
+                startIndex < 0 ||
+                startIndex >= playlist.tracks.size()) {
+
+            return;
+        }
+
+        Toast.makeText(
+                this,
+                "Preparando desde la canción "
+                        + (startIndex + 1)
+                        + "...",
+                Toast.LENGTH_SHORT
+        ).show();
+
+        executor.execute(() -> {
+
+            try {
+
+                final int total =
+                        playlist.tracks.size();
+
+                /*
+                 * =========================================================
+                 * 1. RESOLVER PRIMERO LA CANCIÓN SELECCIONADA
+                 * =========================================================
+                 */
+
+                ApiClient.SpotifyTrack firstTrack =
+                        playlist.tracks.get(startIndex);
+
+                if (
+                        firstTrack == null ||
+                        firstTrack.artist == null ||
+                        firstTrack.title == null ||
+                        (
+                                firstTrack.artist.trim().isEmpty() &&
+                                firstTrack.title.trim().isEmpty()
+                        )
+                ) {
+
+                    handler.post(() ->
+                            Toast.makeText(
+                                    this,
+                                    "No se pudo resolver la canción",
+                                    Toast.LENGTH_SHORT
+                            ).show()
+                    );
+
+                    return;
+                }
+
+                ApiClient.Song firstResolved =
+                        api().resolveAlbumTrack(
+                                firstTrack.artist,
+                                firstTrack.title
+                        );
+
+                if (
+                        firstResolved == null ||
+                        firstResolved.id == null ||
+                        firstResolved.id.trim().isEmpty()
+                ) {
+
+                    handler.post(() ->
+                            Toast.makeText(
+                                    this,
+                                    "No se encontró el audio",
+                                    Toast.LENGTH_SHORT
+                            ).show()
+                    );
+
+                    return;
+                }
+
+                String firstUrl =
+                        api().getPreviewUrl(
+                                firstResolved.id
+                        );
+
+                if (
+                        firstUrl == null ||
+                        firstUrl.trim().isEmpty()
+                ) {
+
+                    handler.post(() ->
+                            Toast.makeText(
+                                    this,
+                                    "No se pudo obtener el audio",
+                                    Toast.LENGTH_SHORT
+                            ).show()
+                    );
+
+                    return;
+                }
+
+                MediaMetadata.Builder firstMetadata =
+                        new MediaMetadata.Builder()
+                                .setTitle(
+                                        firstTrack.title
+                                );
+
+                if (
+                        firstTrack.artist != null &&
+                        !firstTrack.artist.trim().isEmpty()
+                ) {
+
+                    firstMetadata.setArtist(
+                            firstTrack.artist
+                    );
+                }
+
+                if (
+                        firstTrack.album != null &&
+                        !firstTrack.album.trim().isEmpty()
+                ) {
+
+                    firstMetadata.setAlbumTitle(
+                            firstTrack.album
+                    );
+                }
+
+                String firstThumbnail =
+                        firstTrack.thumbnail;
+
+                if (
+                        (firstThumbnail == null ||
+                                firstThumbnail.trim().isEmpty()) &&
+                        firstResolved.thumbnail != null &&
+                        !firstResolved.thumbnail.trim().isEmpty()
+                ) {
+
+                    firstThumbnail =
+                            firstResolved.thumbnail;
+                }
+
+                if (
+                        firstThumbnail != null &&
+                        !firstThumbnail.trim().isEmpty()
+                ) {
+
+                    firstMetadata.setArtworkUri(
+                            Uri.parse(firstThumbnail)
+                    );
+                }
+
+                MediaItem firstItem =
+                        new MediaItem.Builder()
+                                .setUri(firstUrl)
+                                .setMediaMetadata(
+                                        firstMetadata.build()
+                                )
+                                .build();
+
+                List<MediaItem> firstList =
+                        new ArrayList<>();
+
+                firstList.add(firstItem);
+
+                /*
+                 * =========================================================
+                 * 2. ARRANCAR EXACTAMENTE COMO REPRODUCIR TODO
+                 * =========================================================
+                 */
+
+                handler.post(() -> {
+                    if (!isCurrentIndividualPlayback(
+                            playbackGeneration)) {
+                        return;
+                    }
+
+                    sendQueueToPlayer(firstList);
+
+                    updateQueuePreparationProgress(
+                            queueGeneration,
+                            1,
+                            playlistTotal
+                    );
+
+                    markSpotifyTrackObtained(
+                            queueGeneration,
+                            startIndex
+                    );
+                });
+
+                /*
+                 * =========================================================
+                 * 3. RESOLVER EL RESTO DESDE startIndex + 1
+                 *
+                 * Usamos exactamente el mismo sistema que Spotify TODO:
+                 * varios resolvers en paralelo + mapa por índice +
+                 * incorporación estrictamente consecutiva.
+                 * =========================================================
+                 */
+
+                if (startIndex >= total - 1) {
+
+                    handler.post(() ->
+                            Toast.makeText(
+                                    this,
+                                    "Spotify preparado: 1 canción",
+                                    Toast.LENGTH_SHORT
+                            ).show()
+                    );
+
+                    return;
+                }
+
+                int remaining =
+                        total - startIndex - 1;
+
+                ExecutorService resolver =
+                        Executors.newFixedThreadPool(
+                                Math.min(
+                                        3,
+                                        Math.max(
+                                                1,
+                                                remaining
+                                        )
+                                )
+                        );
+
+                java.util.concurrent.ExecutorCompletionService<
+                        java.util.AbstractMap.SimpleEntry<
+                                Integer,
+                                MediaItem
+                        >
+                        > completionService =
+                        new java.util.concurrent.ExecutorCompletionService<>(
+                                resolver
+                        );
+
+                int submitted = 0;
+
+                for (
+                        int index = startIndex + 1;
+                        index < total;
+                        index++
+                ) {
+
+                    final int trackIndex = index;
+
+                    completionService.submit(() -> {
+
+                        ApiClient.SpotifyTrack track =
+                                playlist.tracks.get(
+                                        trackIndex
+                                );
+
+                        try {
+
+                            if (
+                                    track == null ||
+                                    track.artist == null ||
+                                    track.title == null ||
+                                    (
+                                            track.artist.trim().isEmpty() &&
+                                            track.title.trim().isEmpty()
+                                    )
+                            ) {
+
+                                return new java.util.AbstractMap.SimpleEntry<>(
+                                        trackIndex,
+                                        null
+                                );
+                            }
+
+                            ApiClient.Song resolved =
+                                    api().resolveAlbumTrack(
+                                            track.artist,
+                                            track.title
+                                    );
+
+                            if (
+                                    resolved == null ||
+                                    resolved.id == null ||
+                                    resolved.id.trim().isEmpty()
+                            ) {
+
+                                return new java.util.AbstractMap.SimpleEntry<>(
+                                        trackIndex,
+                                        null
+                                );
+                            }
+
+                            String url =
+                                    api().getPreviewUrl(
+                                            resolved.id
+                                    );
+
+                            if (
+                                    url == null ||
+                                    url.trim().isEmpty()
+                            ) {
+
+                                return new java.util.AbstractMap.SimpleEntry<>(
+                                        trackIndex,
+                                        null
+                                );
+                            }
+
+                            MediaMetadata.Builder metadata =
+                                    new MediaMetadata.Builder()
+                                            .setTitle(
+                                                    track.title
+                                            );
+
+                            if (
+                                    track.artist != null &&
+                                    !track.artist.trim().isEmpty()
+                            ) {
+
+                                metadata.setArtist(
+                                        track.artist
+                                );
+                            }
+
+                            if (
+                                    track.album != null &&
+                                    !track.album.trim().isEmpty()
+                            ) {
+
+                                metadata.setAlbumTitle(
+                                        track.album
+                                );
+                            }
+
+                            String thumbnail =
+                                    track.thumbnail;
+
+                            if (
+                                    (thumbnail == null ||
+                                            thumbnail.trim().isEmpty()) &&
+                                    resolved.thumbnail != null &&
+                                    !resolved.thumbnail.trim().isEmpty()
+                            ) {
+
+                                thumbnail =
+                                        resolved.thumbnail;
+                            }
+
+                            if (
+                                    thumbnail != null &&
+                                    !thumbnail.trim().isEmpty()
+                            ) {
+
+                                metadata.setArtworkUri(
+                                        Uri.parse(thumbnail)
+                                );
+                            }
+
+                            MediaItem item =
+                                    new MediaItem.Builder()
+                                            .setUri(url)
+                                            .setMediaMetadata(
+                                                    metadata.build()
+                                            )
+                                            .build();
+
+                            return new java.util.AbstractMap.SimpleEntry<>(
+                                    trackIndex,
+                                    item
+                            );
+
+                        } catch (Exception error) {
+
+                            System.err.println(
+                                    "Spotify individual: no se pudo "
+                                            + "resolver la canción "
+                                            + (trackIndex + 1)
+                                            + ": "
+                                            + error
+                            );
+
+                            return new java.util.AbstractMap.SimpleEntry<>(
+                                    trackIndex,
+                                    null
+                            );
+                        }
+                    });
+
+                    submitted++;
+                }
+
+                /*
+                 * =========================================================
+                 * 4. RECIBIR Y AÑADIR SIEMPRE EN ORDEN
+                 * =========================================================
+                 */
+
+                java.util.Map<Integer, MediaItem> ready =
+                        new java.util.HashMap<>();
+
+                int nextIndex =
+                        startIndex + 1;
+
+                int completed = 0;
+
+                int addedCount = 1;
+
+                while (completed < submitted) {
+
+                    java.util.concurrent.Future<
+                            java.util.AbstractMap.SimpleEntry<
+                                    Integer,
+                                    MediaItem
+                            >
+                            > future =
+                            completionService.take();
+
+                    java.util.AbstractMap.SimpleEntry<
+                            Integer,
+                            MediaItem
+                            > result =
+                            future.get();
+
+                    completed++;
+
+                    int resultIndex =
+                            result.getKey();
+
+                    MediaItem resultItem =
+                            result.getValue();
+
+                    ready.put(
+                            resultIndex,
+                            resultItem
+                    );
+
+                    while (
+                            ready.containsKey(nextIndex)
+                    ) {
+
+                        MediaItem item =
+                                ready.remove(
+                                        nextIndex
+                                );
+
+                        nextIndex++;
+
+                        if (item == null) {
+
+                            continue;
+                        }
+
+                        List<MediaItem> one =
+                                new ArrayList<>();
+
+                        one.add(item);
+
+                        int preparedTrackIndex =
+                                nextIndex - 1;
+
+                        addedCount++;
+
+                        updateQueuePreparationProgress(
+                                queueGeneration,
+                                addedCount,
+                                playlistTotal
+                        );
+
+                        markSpotifyTrackObtained(
+                                queueGeneration,
+                                preparedTrackIndex
+                        );
+
+                        handler.post(() -> {
+                            if (!isCurrentIndividualPlayback(
+                                    playbackGeneration)) {
+                                return;
+                            }
+
+                            addItemsToPlayerQueue(one);
+                        });
+                    }
+                }
+
+                resolver.shutdown();
+
+                final int finalAddedCount =
+                        addedCount;
+
+                handler.post(() ->
+                        Toast.makeText(
+                                this,
+                                "Spotify preparado: "
+                                        + finalAddedCount
+                                        + " canciones",
+                                Toast.LENGTH_SHORT
+                        ).show()
+                );
+
+            } catch (Exception error) {
+
+                handler.post(
+                        () -> showError(error)
+                );
+            }
+        });
+    }
+
     private void playSpotifyTrack(
             ApiClient.SpotifyTrack track) {
 
@@ -6918,7 +8975,22 @@ selectionButtons.addView(
     private void playSpotifyPlaylist(
             ApiClient.SpotifyPlaylist playlist) {
 
-        Toast.makeText(
+        final long playbackGeneration =
+                beginIndividualPlayback();
+
+        
+        final int playlistTotal =
+                playlist != null &&
+                playlist.tracks != null
+                        ? playlist.tracks.size()
+                        : 0;
+
+        final long queueGeneration =
+                beginQueuePreparation(
+                        playlistTotal
+                );
+
+Toast.makeText(
                 this,
                 "Preparando primera canción...",
                 Toast.LENGTH_LONG
@@ -6933,13 +9005,18 @@ selectionButtons.addView(
 
                 if (count == 0) {
 
-                    handler.post(() ->
-                            Toast.makeText(
-                                    this,
-                                    "La playlist no tiene canciones",
-                                    Toast.LENGTH_SHORT
-                            ).show()
-                    );
+                    handler.post(() -> {
+                        if (!isCurrentIndividualPlayback(
+                                playbackGeneration)) {
+                            return;
+                        }
+
+                        Toast.makeText(
+                                this,
+                                "La playlist no tiene canciones",
+                                Toast.LENGTH_SHORT
+                        ).show();
+                    });
 
                     return;
                 }
@@ -6948,10 +9025,6 @@ selectionButtons.addView(
                  * =========================================================
                  * 1. RESOLVER PRIMERO LA PRIMERA CANCIÓN
                  * =========================================================
-                 *
-                 * No esperamos a resolver toda la playlist.
-                 * La primera canción se resuelve primero para empezar
-                 * la reproducción cuanto antes.
                  */
 
                 ApiClient.SpotifyTrack firstTrack =
@@ -6962,13 +9035,18 @@ selectionButtons.addView(
                         firstTrack.title.isEmpty()
                 ) {
 
-                    handler.post(() ->
-                            Toast.makeText(
-                                    this,
-                                    "No se pudo resolver la primera canción",
-                                    Toast.LENGTH_SHORT
-                            ).show()
-                    );
+                    handler.post(() -> {
+                        if (!isCurrentIndividualPlayback(
+                                playbackGeneration)) {
+                            return;
+                        }
+
+                        Toast.makeText(
+                                this,
+                                "No se pudo resolver la primera canción",
+                                Toast.LENGTH_SHORT
+                        ).show();
+                    });
 
                     return;
                 }
@@ -7044,38 +9122,55 @@ selectionButtons.addView(
 
                 /*
                  * =========================================================
-                 * 2. ARRANCAR LA REPRODUCCIÓN INMEDIATAMENTE
+                 * 2. ARRANCAR LA REPRODUCCIÓN
                  * =========================================================
                  */
 
-                handler.post(() ->
-                        sendQueueToPlayer(firstList)
-                );
+                handler.post(() -> {
+
+                    if (!isCurrentIndividualPlayback(
+                            playbackGeneration)) {
+                        return;
+                    }
+
+                    sendQueueToPlayer(firstList);
+
+                    updateQueuePreparationProgress(
+                            queueGeneration,
+                            1,
+                            playlistTotal
+                    );
+
+                    markSpotifyTrackObtained(
+                            queueGeneration,
+                            0
+                    );
+                });
+
+                if (count == 1) {
+
+                    handler.post(() -> {
+
+                        if (!isCurrentIndividualPlayback(
+                                playbackGeneration)) {
+                            return;
+                        }
+
+                        Toast.makeText(
+                                this,
+                                "Spotify preparado: 1 canción",
+                                Toast.LENGTH_SHORT
+                        ).show();
+                    });
+
+                    return;
+                }
 
                 /*
                  * =========================================================
                  * 3. RESOLVER EL RESTO EN SEGUNDO PLANO
                  * =========================================================
-                 *
-                 * Cada tarea conserva su índice original.
-                 *
-                 * Si, por ejemplo, la canción 5 termina antes que la 2,
-                 * se guarda temporalmente y no se añade hasta que estén
-                 * listas 2, 3 y 4.
                  */
-
-                if (count == 1) {
-
-                    handler.post(() ->
-                            Toast.makeText(
-                                    this,
-                                    "Spotify preparado: 1 canción",
-                                    Toast.LENGTH_SHORT
-                            ).show()
-                    );
-
-                    return;
-                }
 
                 ExecutorService resolver =
                         Executors.newFixedThreadPool(
@@ -7248,8 +9343,14 @@ selectionButtons.addView(
                             result.getValue();
 
                     /*
-                     * Guardamos el resultado usando su índice original.
+                     * Si ya hemos empezado otra reproducción,
+                     * no seguimos preparando esta playlist.
                      */
+                    if (!isCurrentIndividualPlayback(
+                            playbackGeneration)) {
+                        break;
+                    }
+
                     ready.put(
                             resultIndex,
                             resultItem
@@ -7259,8 +9360,6 @@ selectionButtons.addView(
                      * =====================================================
                      * Añadir solamente elementos consecutivos.
                      * =====================================================
-                     *
-                     * Así nunca se rompe el orden de Spotify.
                      */
 
                     while (
@@ -7288,11 +9387,31 @@ selectionButtons.addView(
 
                         one.add(item);
 
+                        int preparedTrackIndex =
+                                nextIndex - 1;
+
                         addedCount++;
 
-                        handler.post(() ->
-                                addItemsToPlayerQueue(one)
+                        updateQueuePreparationProgress(
+                                queueGeneration,
+                                addedCount,
+                                playlistTotal
                         );
+
+                        markSpotifyTrackObtained(
+                                queueGeneration,
+                                preparedTrackIndex
+                        );
+
+                        handler.post(() -> {
+
+                            if (!isCurrentIndividualPlayback(
+                                    playbackGeneration)) {
+                                return;
+                            }
+
+                            addItemsToPlayerQueue(one);
+                        });
                     }
                 }
 
@@ -7301,21 +9420,33 @@ selectionButtons.addView(
                 final int finalAddedCount =
                         addedCount;
 
-                handler.post(() ->
-                        Toast.makeText(
-                                this,
-                                "Spotify preparado: "
-                                        + finalAddedCount
-                                        + " canciones",
-                                Toast.LENGTH_SHORT
-                        ).show()
-                );
+                handler.post(() -> {
+
+                    if (!isCurrentIndividualPlayback(
+                            playbackGeneration)) {
+                        return;
+                    }
+
+                    Toast.makeText(
+                            this,
+                            "Spotify preparado: "
+                                    + finalAddedCount
+                                    + " canciones",
+                            Toast.LENGTH_SHORT
+                    ).show();
+                });
 
             } catch (Exception e) {
 
-                handler.post(
-                        () -> showError(e)
-                );
+                handler.post(() -> {
+
+                    if (!isCurrentIndividualPlayback(
+                            playbackGeneration)) {
+                        return;
+                    }
+
+                    showError(e);
+                });
             }
         });
     }
@@ -9428,6 +11559,220 @@ selectionButtons.addView(
         }
     }
 
+    /*
+     * =========================================================
+     * CONTADOR DE PREPARACIÓN DE COLA
+     * =========================================================
+     */
+
+    private long beginQueuePreparation(int total) {
+
+        final long generation =
+                ++queuePreparationGeneration;
+
+        handler.post(() -> {
+
+            if (generation != queuePreparationGeneration) {
+                return;
+            }
+
+            if (playerQueueProgress != null) {
+
+                playerQueueProgress.setText(
+                        "0/" + Math.max(0, total)
+                );
+
+                playerQueueProgress.setVisibility(
+                        android.view.View.VISIBLE
+                );
+            }
+        });
+
+        return generation;
+    }
+
+    private boolean isCurrentQueuePreparation(
+            long generation) {
+
+        return generation ==
+                queuePreparationGeneration;
+    }
+
+    /*
+     * ============================================================
+     * ESTADO VISUAL DE PISTAS OBTENIDAS
+     * ============================================================
+     */
+
+    private TextView createObtainedStatusView() {
+
+        TextView status =
+                new TextView(this);
+
+        status.setText("✓ OBTENIDA");
+        status.setTextSize(11);
+        status.setTypeface(
+                null,
+                android.graphics.Typeface.BOLD
+        );
+        status.setTextColor(
+                Color.rgb(80, 220, 130)
+        );
+        status.setVisibility(
+                android.view.View.GONE
+        );
+
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                );
+
+        params.setMargins(
+                0,
+                dp(3),
+                0,
+                0
+        );
+
+        status.setLayoutParams(params);
+
+        return status;
+    }
+
+    private void markAlbumTrackObtained(
+            long generation,
+            int trackIndex) {
+
+        handler.post(() -> {
+
+            if (!isCurrentQueuePreparation(generation)) {
+                return;
+            }
+
+            if (
+                    trackIndex < 0 ||
+                    trackIndex >=
+                            albumPreparationStatusViews.size()
+            ) {
+                return;
+            }
+
+            TextView status =
+                    albumPreparationStatusViews.get(
+                            trackIndex
+                    );
+
+            if (status != null) {
+                status.setText("✓ OBTENIDA");
+                status.setVisibility(
+                        android.view.View.VISIBLE
+                );
+            }
+        });
+    }
+
+    private void markSpotifyTrackObtained(
+            long generation,
+            int trackIndex) {
+
+        handler.post(() -> {
+
+            if (!isCurrentQueuePreparation(generation)) {
+                return;
+            }
+
+            if (
+                    trackIndex < 0 ||
+                    trackIndex >=
+                            spotifyPreparationStatusViews.size()
+            ) {
+                return;
+            }
+
+            TextView status =
+                    spotifyPreparationStatusViews.get(
+                            trackIndex
+                    );
+
+            if (status != null) {
+                status.setText("✓ OBTENIDA");
+                status.setVisibility(
+                        android.view.View.VISIBLE
+                );
+            }
+        });
+    }
+
+    private void updateQueuePreparationProgress(
+            long generation,
+            int loaded,
+            int total) {
+
+        handler.post(() -> {
+
+            if (!isCurrentQueuePreparation(
+                    generation)) {
+                return;
+            }
+
+            if (playerQueueProgress != null) {
+
+                int safeLoaded =
+                        Math.max(0, loaded);
+
+                int safeTotal =
+                        Math.max(0, total);
+
+                if (
+                        safeTotal > 0 &&
+                        safeLoaded >= safeTotal
+                ) {
+
+                    playerQueueProgress.setText(
+                            safeLoaded
+                                    + "/"
+                                    + safeTotal
+                                    + " resultados · ¡COMPLETADO!"
+                    );
+
+                    playerQueueProgress.setTextColor(
+                            Color.rgb(80, 220, 130)
+                    );
+
+                } else {
+
+                    playerQueueProgress.setText(
+                            safeLoaded
+                                    + "/"
+                                    + safeTotal
+                                    + " resultados"
+                    );
+
+                    playerQueueProgress.setTextColor(
+                            Color.LTGRAY
+                    );
+                }
+
+                playerQueueProgress.setVisibility(
+                        android.view.View.VISIBLE
+                );
+            }
+        });
+    }
+
+    private void hideQueuePreparationProgress() {
+
+        ++queuePreparationGeneration;
+
+        if (playerQueueProgress != null) {
+
+            playerQueueProgress.setVisibility(
+                    android.view.View.GONE
+            );
+        }
+    }
+
     private void updatePlayerUi() {
 
         if (mediaController == null) {
@@ -10109,6 +12454,259 @@ private JSONArray scanOfflineFolder() {
     }
 
     return library;
+}
+
+private void playOfflineLibraryFromIndex(
+        JSONArray library,
+        int startIndex) {
+        final long playbackGeneration =
+                beginIndividualPlayback();
+
+
+    if (library == null ||
+            library.length() == 0 ||
+            startIndex < 0 ||
+            startIndex >= library.length()) {
+
+        return;
+    }
+
+    if (mediaController == null) {
+
+        Toast.makeText(
+                this,
+                "Reproductor no conectado",
+                Toast.LENGTH_SHORT
+        ).show();
+
+        return;
+    }
+
+    executor.execute(() -> {
+
+        boolean firstStarted = false;
+        int prepared = 0;
+        int failed = 0;
+
+        for (
+                int i = startIndex;
+                i < library.length();
+                i++
+        ) {
+
+            try {
+
+                JSONObject item =
+                        library.optJSONObject(i);
+
+                if (item == null) {
+                    failed++;
+                    continue;
+                }
+
+                String uriString =
+                        item.optString(
+                                "uri",
+                                ""
+                        );
+
+                if (uriString.trim().isEmpty()) {
+                    failed++;
+                    continue;
+                }
+
+                Uri uri =
+                        Uri.parse(uriString);
+
+                boolean exists = false;
+
+                try {
+
+                    DocumentFile file =
+                            DocumentFile.fromSingleUri(
+                                    this,
+                                    uri
+                            );
+
+                    exists =
+                            file != null &&
+                                    file.exists();
+
+                } catch (Exception ignored) {
+                }
+
+                if (!exists) {
+                    failed++;
+                    continue;
+                }
+
+                String title =
+                        item.optString(
+                                "title",
+                                "Canción"
+                        );
+
+                String artist =
+                        item.optString(
+                                "artist",
+                                ""
+                        );
+
+                String album =
+                        item.optString(
+                                "album",
+                                ""
+                        );
+
+                String thumbnail =
+                        item.optString(
+                                "thumbnail",
+                                ""
+                        ).trim();
+
+                String videoId =
+                        item.optString(
+                                "videoId",
+                                ""
+                        ).trim();
+
+                if (
+                        thumbnail.isEmpty() &&
+                        !videoId.isEmpty()
+                ) {
+
+                    thumbnail =
+                            "https://i.ytimg.com/vi/"
+                                    + videoId
+                                    + "/hqdefault.jpg";
+                }
+
+                MediaMetadata.Builder metadata =
+                        new MediaMetadata.Builder()
+                                .setTitle(title);
+
+                if (!artist.isEmpty()) {
+                    metadata.setArtist(artist);
+                }
+
+                if (!album.isEmpty()) {
+                    metadata.setAlbumTitle(album);
+                }
+
+                if (!thumbnail.isEmpty()) {
+
+                    metadata.setArtworkUri(
+                            Uri.parse(thumbnail)
+                    );
+                }
+
+                MediaItem mediaItem =
+                        new MediaItem.Builder()
+                                .setUri(uri)
+                                .setMediaMetadata(
+                                        metadata.build()
+                                )
+                                .build();
+
+                prepared++;
+
+                if (!firstStarted) {
+
+                    firstStarted = true;
+
+                    List<MediaItem> first =
+                            new ArrayList<>();
+
+                    first.add(mediaItem);
+
+                    handler.post(
+                            () -> {
+                                if (!isCurrentIndividualPlayback(
+                                        playbackGeneration)) {
+                                    return;
+                                }
+
+                                sendQueueToPlayer(first);
+                            }
+                    );
+
+                } else {
+
+                    List<MediaItem> next =
+                            new ArrayList<>();
+
+                    next.add(mediaItem);
+
+                    handler.post(
+                            () -> {
+                                if (!isCurrentIndividualPlayback(
+                                        playbackGeneration)) {
+                                    return;
+                                }
+
+                                addItemsToPlayerQueue(next);
+                            }
+                    );
+                }
+
+            } catch (Exception error) {
+
+                failed++;
+
+                android.util.Log.e(
+                        "MusicDownloader",
+                        "Offline: no se pudo preparar "
+                                + "la canción "
+                                + (i + 1),
+                        error
+                );
+            }
+        }
+
+        final int totalPrepared =
+                prepared;
+
+        final int totalFailed =
+                failed;
+
+        final boolean finalFirstStarted =
+                firstStarted;
+
+        handler.post(() -> {
+
+            if (!finalFirstStarted) {
+
+                Toast.makeText(
+                        this,
+                        "No hay canciones offline disponibles desde esa posición",
+                        Toast.LENGTH_LONG
+                ).show();
+
+                return;
+            }
+
+            String message =
+                    "Offline preparado desde la canción "
+                            + (startIndex + 1)
+                            + ": "
+                            + totalPrepared
+                            + " canciones";
+
+            if (totalFailed > 0) {
+
+                message +=
+                        " · "
+                                + totalFailed
+                                + " omitidas";
+            }
+
+            Toast.makeText(
+                    this,
+                    message,
+                    Toast.LENGTH_SHORT
+            ).show();
+        });
+    });
 }
 
 private void playOfflineLibrary(
@@ -11038,10 +13636,9 @@ private void showOfflineLibrary() {
             play.setOnClickListener(
                     v -> {
 
-                        playResolved(
-                                finalUri,
-                                finalTitle,
-                                finalThumbnail
+                        playOfflineLibraryFromIndex(
+                                library,
+                                finalItemIndex
                         );
 
                         Toast.makeText(
@@ -11171,11 +13768,29 @@ private void showDownloads() {
 
     downloadsTabLayout.removeAllViews();
 
+    // Mover la MISMA tarjeta de servidor al principio de Descargas.
+    if (serverCard != null) {
+        android.view.ViewParent parent = serverCard.getParent();
+
+        if (parent instanceof android.view.ViewGroup) {
+            ((android.view.ViewGroup) parent).removeView(serverCard);
+        }
+
+        downloadsTabLayout.addView(
+                serverCard,
+                0
+        );
+
+        serverCard.setVisibility(
+                android.view.View.VISIBLE
+        );
+    }
+
     TextView title =
             new TextView(this);
 
     title.setText(
-            "📥 Descargas"
+            "🔗 Conexiones"
     );
 
     title.setTextSize(24);
