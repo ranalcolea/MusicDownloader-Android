@@ -129,6 +129,19 @@ public class MainActivity extends android.app.Activity {
     private final List<TextView> spotifyPreparationStatusViews =
             new ArrayList<>();
 
+    /*
+     * IDs de las canciones de búsqueda normal que ya han sido
+     * preparadas para reproducirse.
+     *
+     * Se guarda el ID y no la posición porque la búsqueda está
+     * paginada y las tarjetas se reconstruyen al cambiar de página.
+     */
+    private final java.util.Set<String> searchObtainedVideoIds =
+            new java.util.HashSet<>();
+
+    private final List<TextView> searchPreparationStatusViews =
+            new ArrayList<>();
+
     private volatile long queuePreparationGeneration = 0;
 
     private String playerArtworkLoaded = "";
@@ -3372,6 +3385,12 @@ private void loadThumbnail(
          */
         if (songs != null) {
             currentSearchSongs = songs;
+
+            /*
+             * Es una búsqueda nueva: las canciones obtenidas de la
+             * búsqueda anterior no deben aparecer como obtenidas.
+             */
+            searchObtainedVideoIds.clear();
         }
 
         renderSearchSongsPage();
@@ -3720,6 +3739,40 @@ private void loadThumbnail(
             info.addView(
                     artist,
                     artistParams
+            );
+
+            /*
+             * ESTADO OBTENIDA
+             *
+             * Exactamente el mismo componente visual usado por
+             * álbumes y Spotify.
+             */
+            TextView obtainedStatus =
+                    createObtainedStatusView();
+
+            /*
+             * Guardamos el ID en la propia vista para poder localizar
+             * exactamente esta tarjeta cuando la canción se prepare.
+             */
+            obtainedStatus.setTag(
+                    song.id
+            );
+
+            if (
+                    song.id != null &&
+                    searchObtainedVideoIds.contains(song.id)
+            ) {
+                obtainedStatus.setVisibility(
+                        android.view.View.VISIBLE
+                );
+            }
+
+            searchPreparationStatusViews.add(
+                    obtainedStatus
+            );
+
+            info.addView(
+                    obtainedStatus
             );
 
             top.addView(
@@ -4144,6 +4197,16 @@ private void loadThumbnail(
             return;
         }
 
+        /*
+         * Cada reproducción de cola obtiene su propia generación.
+         * Esto evita que una preparación anterior pueda actualizar
+         * el estado visual de una cola nueva.
+         */
+        final long queueGeneration =
+                beginQueuePreparation(
+                        songs.size()
+                );
+
         final long playbackGeneration =
                 beginIndividualPlayback();
 
@@ -4156,6 +4219,7 @@ private void loadThumbnail(
         executor.execute(() -> {
 
             boolean firstStarted = false;
+            int preparedCount = 0;
 
             for (ApiClient.Song song : songs) {
 
@@ -4209,6 +4273,76 @@ private void loadThumbnail(
                                     )
                                     .build();
 
+                    /*
+                     * La canción ya tiene su URL de reproducción resuelta.
+                     * La marcamos como OBTENIDA inmediatamente.
+                     */
+                    final String preparedVideoId =
+                            videoId;
+
+                    preparedCount++;
+
+                    final int finalPreparedCount =
+                            preparedCount;
+
+                    handler.post(() -> {
+
+                        if (!isCurrentQueuePreparation(
+                                queueGeneration)) {
+                            return;
+                        }
+
+                        /*
+                         * Guardamos el estado por ID para que permanezca
+                         * aunque el usuario cambie de página.
+                         */
+                        searchObtainedVideoIds.add(
+                                preparedVideoId
+                        );
+
+                        /*
+                         * Si la tarjeta está actualmente visible,
+                         * mostramos inmediatamente ✓ OBTENIDA.
+                         */
+                        for (
+                                TextView status :
+                                searchPreparationStatusViews
+                        ) {
+
+                            if (status == null) {
+                                continue;
+                            }
+
+                            Object tag =
+                                    status.getTag();
+
+                            if (
+                                    preparedVideoId.equals(tag)
+                            ) {
+
+                                status.setText(
+                                        "✓ OBTENIDA"
+                                );
+
+                                status.setVisibility(
+                                        android.view.View.VISIBLE
+                                );
+
+                                break;
+                            }
+                        }
+
+                        /*
+                         * Mismo contador de preparación utilizado por
+                         * álbumes y Spotify.
+                         */
+                        updateQueuePreparationProgress(
+                                queueGeneration,
+                                finalPreparedCount,
+                                songs.size()
+                        );
+                    });
+
                     if (!firstStarted) {
 
                         firstStarted = true;
@@ -4220,12 +4354,15 @@ private void loadThumbnail(
 
                         handler.post(
                                 () -> {
+
                                     if (!isCurrentIndividualPlayback(
                                             playbackGeneration)) {
                                         return;
                                     }
 
-                                    sendQueueToPlayer(first);
+                                    sendQueueToPlayer(
+                                            first
+                                    );
                                 }
                         );
 
@@ -4238,21 +4375,42 @@ private void loadThumbnail(
 
                         handler.post(
                                 () -> {
+
                                     if (!isCurrentIndividualPlayback(
                                             playbackGeneration)) {
                                         return;
                                     }
 
-                                    addItemsToPlayerQueue(next);
+                                    addItemsToPlayerQueue(
+                                            next
+                                    );
                                 }
                         );
                     }
 
                 } catch (Exception ignored) {
 
-                    // Si una canción falla, continúa con la siguiente.
+                    /*
+                     * Si una canción falla, continúa con la siguiente.
+                     */
                 }
             }
+
+            /*
+             * La preparación ha terminado.
+             *
+             * No ocultamos el estado ✓ OBTENIDA de las tarjetas.
+             * Solo ocultamos el contador de preparación del mini-player.
+             */
+            handler.post(() -> {
+
+                if (!isCurrentQueuePreparation(
+                        queueGeneration)) {
+                    return;
+                }
+
+                hideQueuePreparationProgress();
+            });
         });
     }
 
@@ -9644,14 +9802,26 @@ Toast.makeText(
                             slot.progress.setProgress(100);
 
                             slot.status.setText(
-                                    "✓ Completado · enviado a Navidrome"
+                                    "✓ DESCARGADA"
                             );
 
                             slot.button.setText(
-                                    "✓ Completado"
+                                    "✓ Descargada"
                             );
 
                             slot.button.setEnabled(false);
+
+                            handler.postDelayed(() -> {
+
+                                slot.status.setText(
+                                        "🎧 ENVIADA A NAVIDROME"
+                                );
+
+                                slot.button.setText(
+                                        "✓ Completado"
+                                );
+
+                            }, 700);
 
                             return;
 
@@ -9864,17 +10034,17 @@ Toast.makeText(
                             );
 
                             slot.status.setText(
-                                    "📥 Descarga lista · guardando en el móvil..."
+                                    "✓ DESCARGADA"
                             );
 
                             slot.button.setText(
-                                    "📥 Guardando..."
+                                    "✓ Descargada"
                             );
 
                             updateMobileDownloadMonitor(
                                     job,
                                     99,
-                                    "📥 Descarga lista · guardando en el móvil..."
+                                    "✓ DESCARGADA"
                             );
 
                             saveMobileDownload(
@@ -10472,8 +10642,7 @@ Toast.makeText(
                     );
 
                     slot.status.setText(
-                            "✓ Guardado offline · "
-                                    + savedFilename
+                            "📱 ENVIADA AL MÓVIL"
                     );
 
                     slot.button.setText(
@@ -10486,13 +10655,12 @@ Toast.makeText(
 
                     finishMobileDownloadMonitor(
                             job,
-                            "✓ Guardado offline · "
-                                    + savedFilename
+                            "📱 ENVIADA AL MÓVIL"
                     );
 
                     Toast.makeText(
                             this,
-                            "📱 Canción guardada offline",
+                            "📱 Canción enviada al móvil",
                             Toast.LENGTH_SHORT
                     ).show();
                 });
@@ -16354,6 +16522,52 @@ private void importSpotifyFile(Uri uri) {
 
         try {
 
+            String filename =
+                    "playlist.txt";
+
+            android.database.Cursor cursor =
+                    getContentResolver().query(
+                            uri,
+                            new String[]{
+                                    android.provider.OpenableColumns.DISPLAY_NAME
+                            },
+                            null,
+                            null,
+                            null
+                    );
+
+            if (cursor != null) {
+
+                try {
+
+                    if (cursor.moveToFirst()) {
+
+                        int nameIndex =
+                                cursor.getColumnIndex(
+                                        android.provider.OpenableColumns.DISPLAY_NAME
+                                );
+
+                        if (nameIndex >= 0) {
+
+                            String detectedName =
+                                    cursor.getString(nameIndex);
+
+                            if (detectedName != null &&
+                                    !detectedName.trim().isEmpty()) {
+
+                                filename =
+                                        detectedName.trim();
+                            }
+                        }
+                    }
+
+                } finally {
+
+                    cursor.close();
+                }
+            }
+
+
             java.io.InputStream input =
                     getContentResolver()
                     .openInputStream(uri);
@@ -16374,9 +16588,6 @@ private void importSpotifyFile(Uri uri) {
 
             reader.close();
 
-
-            String filename =
-                    "playlist.txt";
 
             String response =
                     api().importSpotifyFile(
