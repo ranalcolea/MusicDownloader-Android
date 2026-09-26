@@ -149,9 +149,6 @@ public class MainActivity extends android.app.Activity {
 
     private LinearLayout player;
 
-    // El usuario ha cerrado manualmente el mini-player.
-    private boolean playerManuallyClosed = false;
-
     /*
      * El usuario puede minimizar el mini-player sin detener
      * la reproducción. El botón flotante permite restaurarlo.
@@ -1277,63 +1274,6 @@ public class MainActivity extends android.app.Activity {
                 minimizePlayerButton
         );
 
-        /*
-         * BOTÓN CERRAR
-         *
-         * Mantiene el comportamiento original:
-         * detener la reproducción y ocultar el player.
-         */
-        Button closePlayerButton =
-                roundedButton();
-
-        closePlayerButton.setText(
-                "✕"
-        );
-
-        closePlayerButton.setTextSize(
-                13
-        );
-
-        closePlayerButton.setMinHeight(
-                dp(36)
-        );
-
-        closePlayerButton.setMinWidth(
-                dp(40)
-        );
-
-        closePlayerButton.setPadding(
-                dp(7),
-                0,
-                dp(7),
-                0
-        );
-
-        closePlayerButton.setOnClickListener(
-                v -> {
-
-                    playerManuallyClosed = true;
-                    playerMinimized = false;
-
-                    if (mediaController != null) {
-                        mediaController.stop();
-                    }
-
-                    player.setVisibility(
-                            android.view.View.GONE
-                    );
-
-                    if (restorePlayerButton != null) {
-                        restorePlayerButton.setVisibility(
-                                android.view.View.GONE
-                        );
-                    }
-                }
-        );
-
-        playerHeader.addView(
-                closePlayerButton
-        );
 
         player.addView(
                 playerHeader
@@ -1907,11 +1847,9 @@ public class MainActivity extends android.app.Activity {
                             android.view.View.GONE
                     );
 
-                    if (!playerManuallyClosed) {
-                        player.setVisibility(
-                                android.view.View.VISIBLE
-                        );
-                    }
+                    player.setVisibility(
+                            android.view.View.VISIBLE
+                    );
 
                     updatePlayerUi();
                 }
@@ -2819,6 +2757,7 @@ public class MainActivity extends android.app.Activity {
 private void loadOfflineThumbnail(
         String thumbnail,
         String videoId,
+        Uri offlineUri,
         ImageView imageView) {
 
     executor.execute(() -> {
@@ -2953,6 +2892,49 @@ private void loadOfflineThumbnail(
 
                 if (connection != null) {
                     connection.disconnect();
+                }
+            }
+        }
+
+        /*
+         * 3. Si no existe portada por URL ni por YouTube,
+         * intentar recuperar la portada incrustada
+         * directamente desde el MP3/Opus.
+         */
+        if (bitmap == null &&
+                offlineUri != null) {
+
+            android.media.MediaMetadataRetriever retriever =
+                    new android.media.MediaMetadataRetriever();
+
+            try {
+
+                retriever.setDataSource(
+                        MainActivity.this,
+                        offlineUri
+                );
+
+                byte[] artwork =
+                        retriever.getEmbeddedPicture();
+
+                if (artwork != null &&
+                        artwork.length > 0) {
+
+                    bitmap =
+                            BitmapFactory.decodeByteArray(
+                                    artwork,
+                                    0,
+                                    artwork.length
+                            );
+                }
+
+            } catch (Exception ignored) {
+
+            } finally {
+
+                try {
+                    retriever.release();
+                } catch (Exception ignored) {
                 }
             }
         }
@@ -3950,6 +3932,12 @@ private void loadThumbnail(
                     buttonsParams
             );
 
+            /*
+             * ========================================================
+             * PROGRESO NAVIDROME
+             * ========================================================
+             */
+
             ProgressBar progress =
                     new ProgressBar(
                             this,
@@ -3963,12 +3951,12 @@ private void loadThumbnail(
             LinearLayout.LayoutParams progressParams =
                     new LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT,
-                            dp(4)
+                            dp(6)
                     );
 
             progressParams.setMargins(
                     0,
-                    dp(10),
+                    dp(8),
                     0,
                     0
             );
@@ -4018,12 +4006,89 @@ private void loadThumbnail(
                             status
                     );
 
+            /*
+             * ========================================================
+             * PROGRESO OFFLINE
+             * ========================================================
+             *
+             * Es independiente del progreso de Navidrome.
+             * Así cada botón controla exclusivamente su propia barra.
+             */
+
+            ProgressBar offlineProgress =
+                    new ProgressBar(
+                            this,
+                            null,
+                            android.R.attr.progressBarStyleHorizontal
+                    );
+
+            offlineProgress.setMax(100);
+            offlineProgress.setProgress(0);
+
+            LinearLayout.LayoutParams offlineProgressParams =
+                    new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            dp(5)
+                    );
+
+            offlineProgressParams.setMargins(
+                    0,
+                    dp(5),
+                    0,
+                    0
+            );
+
+            card.addView(
+                    offlineProgress,
+                    offlineProgressParams
+            );
+
+            TextView offlineStatus =
+                    new TextView(this);
+
+            offlineStatus.setText(
+                    "📱 Listo para guardar offline"
+            );
+
+            offlineStatus.setTextSize(11);
+
+            offlineStatus.setTextColor(
+                    Color.rgb(135, 135, 145)
+            );
+
+            LinearLayout.LayoutParams offlineStatusParams =
+                    new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                    );
+
+            offlineStatusParams.setMargins(
+                    0,
+                    dp(3),
+                    0,
+                    0
+            );
+
+            card.addView(
+                    offlineStatus,
+                    offlineStatusParams
+            );
+
+            DownloadSlot offlineSlot =
+                    new DownloadSlot(
+                            song.id,
+                            song.title,
+                            offline,
+                            offlineProgress,
+                            offlineStatus
+                    );
+
             download.setOnClickListener(
                     v -> startNormalDownload(slot)
             );
 
             offline.setOnClickListener(
-                    v -> startMobileDownload(slot)
+                    v -> startMobileDownload(offlineSlot)
             );
 
             contentLayout.addView(
@@ -5643,8 +5708,6 @@ private void loadThumbnail(
                         )
                         .build();
 
-        playerManuallyClosed = false;
-
         mediaController.setMediaItem(item);
         mediaController.prepare();
         mediaController.play();
@@ -6417,6 +6480,61 @@ Toast.makeText(
 
         contentLayout.removeAllViews();
 
+        /*
+         * =========================================================
+         * EL SCROLL EXTERIOR DE SPOTIFY ES SOLO EL VIEWPORT
+         * =========================================================
+         */
+        spotifyTabScroll.setFillViewport(true);
+        spotifyTabScroll.setVerticalScrollBarEnabled(false);
+        spotifyTabScroll.setOverScrollMode(
+                View.OVER_SCROLL_NEVER
+        );
+
+        /*
+         * No queremos que el ScrollView exterior conserve una
+         * posición anterior.
+         */
+        spotifyTabScroll.scrollTo(
+                0,
+                0
+        );
+
+        /*
+         * =========================================================
+         * ROOT
+         * =========================================================
+         *
+         * Este root tendrá EXACTAMENTE la altura del viewport.
+         *
+         * Por tanto:
+         *
+         * spotifyTabScroll
+         *       └── root = altura exacta del viewport
+         *              ├── cabecera fija
+         *              └── listsScroll = espacio restante
+         *
+         * El ScrollView exterior no tendrá contenido sobrante
+         * que pueda desplazar.
+         */
+        final LinearLayout root =
+                new LinearLayout(this);
+
+        root.setOrientation(
+                LinearLayout.VERTICAL
+        );
+
+        root.setPadding(
+                0,
+                0,
+                0,
+                0
+        );
+
+        // =========================================================
+        // TÍTULO
+        // =========================================================
+
         TextView heading =
                 new TextView(this);
 
@@ -6430,8 +6548,13 @@ Toast.makeText(
                 Gravity.CENTER
         );
 
-        contentLayout.addView(heading);
+        root.addView(
+                heading
+        );
 
+        // =========================================================
+        // URL
+        // =========================================================
 
         EditText spotifyUrl =
                 new EditText(this);
@@ -6442,10 +6565,13 @@ Toast.makeText(
 
         spotifyUrl.setSingleLine(true);
 
-        contentLayout.addView(
+        root.addView(
                 spotifyUrl
         );
 
+        // =========================================================
+        // IMPORTAR
+        // =========================================================
 
         Button importButton =
                 roundedButton();
@@ -6478,10 +6604,13 @@ Toast.makeText(
                 }
         );
 
-        contentLayout.addView(
+        root.addView(
                 importButton
         );
 
+        // =========================================================
+        // EXPORTIFY
+        // =========================================================
 
         Button exportifyButton =
                 roundedButton();
@@ -6492,20 +6621,26 @@ Toast.makeText(
 
         exportifyButton.setOnClickListener(
                 v -> {
+
                     Intent intent =
                             new Intent(
                                     Intent.ACTION_VIEW,
-                                    Uri.parse("https://exportify.net/")
+                                    Uri.parse(
+                                            "https://exportify.net/"
+                                    )
                             );
 
                     startActivity(intent);
                 }
         );
 
-        contentLayout.addView(
+        root.addView(
                 exportifyButton
         );
 
+        // =========================================================
+        // ARCHIVO
+        // =========================================================
 
         Button fileButton =
                 roundedButton();
@@ -6537,40 +6672,128 @@ Toast.makeText(
                 }
         );
 
-        contentLayout.addView(
+        root.addView(
                 fileButton
         );
 
+        // =========================================================
+        // CABECERA DE LA PERSIANA
+        // =========================================================
 
-        Button savedButton =
-                roundedButton();
-
-        savedButton.setText(
-                "📚 LISTAS GUARDADAS"
-        );
-
-        savedButton.setOnClickListener(
-                v -> loadSpotifyLists()
-        );
-
-        contentLayout.addView(
-                savedButton
-        );
-
-
-        TextView savedHeading =
+        final TextView savedHeading =
                 new TextView(this);
 
         savedHeading.setText(
-                "\n📚 Listas guardadas"
+                "📚 Listas guardadas    ▲"
         );
 
-        savedHeading.setTextSize(20);
+        savedHeading.setTextSize(16);
+        savedHeading.setTextColor(Color.WHITE);
 
-        contentLayout.addView(
+        savedHeading.setGravity(
+                Gravity.CENTER_VERTICAL
+        );
+
+        savedHeading.setPadding(
+                dp(20),
+                dp(14),
+                dp(20),
+                dp(14)
+        );
+
+        savedHeading.setBackground(
+                roundedBackground(
+                        Color.rgb(38, 38, 48),
+                        Color.rgb(108, 108, 128),
+                        19
+                )
+        );
+
+        savedHeading.setElevation(
+                dp(6)
+        );
+
+        root.addView(
                 savedHeading
         );
 
+        // =========================================================
+        // CONTENEDOR DE LAS LISTAS
+        // =========================================================
+
+        final LinearLayout savedListsContainer =
+                new LinearLayout(this);
+
+        savedListsContainer.setOrientation(
+                LinearLayout.VERTICAL
+        );
+
+        // =========================================================
+        // ÚNICO SCROLL REAL
+        // =========================================================
+
+        final ScrollView listsScroll =
+                new ScrollView(this);
+
+        listsScroll.setFillViewport(true);
+
+        listsScroll.setVerticalScrollBarEnabled(true);
+
+        listsScroll.setOverScrollMode(
+                View.OVER_SCROLL_IF_CONTENT_SCROLLS
+        );
+
+        listsScroll.addView(
+                savedListsContainer
+        );
+
+        /*
+         * Inicialmente ocupa el espacio restante.
+         *
+         * Después del layout calcularemos la altura exacta,
+         * eliminando por completo la posibilidad de que el
+         * ScrollView exterior crezca.
+         */
+        root.addView(
+                listsScroll,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        0,
+                        1f
+                )
+        );
+
+        // =========================================================
+        // PERSIANA
+        // =========================================================
+
+        View.OnClickListener toggleLists =
+                v -> {
+
+                    boolean visible =
+                            listsScroll.getVisibility()
+                                    == View.VISIBLE;
+
+                    listsScroll.setVisibility(
+                            visible
+                                    ? View.GONE
+                                    : View.VISIBLE
+                    );
+
+                    savedHeading.setText(
+                            visible
+                                    ? "📚 Listas guardadas    ▼"
+                                    : "📚 Listas guardadas    ▲"
+                    );
+                };
+
+        savedHeading.setOnClickListener(
+                toggleLists
+        );
+
+        // =========================================================
+        // LISTA VACÍA
+        // =========================================================
 
         if (lists.isEmpty()) {
 
@@ -6581,100 +6804,197 @@ Toast.makeText(
                     "No hay listas guardadas"
             );
 
-            contentLayout.addView(
+            empty.setPadding(
+                    16,
+                    12,
+                    16,
+                    12
+            );
+
+            savedListsContainer.addView(
                     empty
             );
 
-            return;
+        } else {
+
+            // =====================================================
+            // LISTAS
+            // =====================================================
+
+            for (
+                    ApiClient.SpotifyPlaylist playlist :
+                    lists
+            ) {
+
+                LinearLayout row =
+                        new LinearLayout(this);
+
+                row.setOrientation(
+                        LinearLayout.VERTICAL
+                );
+
+                // -------------------------------------------------
+                // ABRIR
+                // -------------------------------------------------
+
+                Button open =
+                        roundedButton();
+
+                String count =
+                        playlist.trackCount > 0
+                                ? " · "
+                                + playlist.trackCount
+                                + " canciones"
+                                : "";
+
+                open.setText(
+                        "🎧 "
+                                + playlist.name
+                                + count
+                );
+
+                open.setSingleLine(true);
+
+                open.setEllipsize(
+                        android.text.TextUtils.TruncateAt.MARQUEE
+                );
+
+                open.setMarqueeRepeatLimit(
+                        -1
+                );
+
+                open.setSelected(true);
+
+                open.setHorizontallyScrolling(
+                        true
+                );
+
+                open.setOnClickListener(
+                        v -> loadSpotifyPlaylist(
+                                playlist.id
+                        )
+                );
+
+                row.addView(
+                        open
+                );
+
+                // -------------------------------------------------
+                // BORRAR
+                // -------------------------------------------------
+
+                Button delete =
+                        roundedButton();
+
+                delete.setText(
+                        "🗑 Borrar"
+                );
+
+                delete.setOnClickListener(
+                        v -> deleteSpotifyPlaylist(
+                                playlist
+                        )
+                );
+
+                row.addView(
+                        delete
+                );
+
+                savedListsContainer.addView(
+                        row
+                );
+            }
         }
 
+        // =========================================================
+        // COLOCAR ROOT
+        // =========================================================
 
-        for (
-                ApiClient.SpotifyPlaylist playlist :
-                lists
-        ) {
+        spotifyTabLayout.removeAllViews();
 
-            LinearLayout row =
-                    new LinearLayout(this);
+        spotifyTabLayout.setOrientation(
+                LinearLayout.VERTICAL
+        );
 
-            row.setOrientation(
-                    LinearLayout.VERTICAL
-            );
+        /*
+         * MUY IMPORTANTE:
+         *
+         * MATCH_PARENT + fillViewport hará que el ScrollView
+         * exterior mida el root como su viewport cuando sea
+         * necesario.
+         */
+        spotifyTabLayout.addView(
+                root,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.MATCH_PARENT
+                )
+        );
 
+        contentLayout =
+                spotifyTabLayout;
 
-            Button open =
-                    roundedButton();
+        /*
+         * =========================================================
+         * CORRECCIÓN DEFINITIVA DE MEDICIÓN
+         * =========================================================
+         *
+         * Esperamos a que Android haya medido el ScrollView.
+         * Entonces forzamos el root a tener EXACTAMENTE esa
+         * altura.
+         *
+         * De esta manera:
+         *
+         * outer ScrollView = viewport
+         * root             = viewport exacto
+         * listsScroll       = resto del viewport
+         *
+         * El outer ScrollView no puede desplazarse.
+         */
+        spotifyTabScroll.post(
+                () -> {
 
+                    int viewportHeight =
+                            spotifyTabScroll.getHeight();
 
-            String count =
-                    playlist.trackCount > 0
-                            ? " · "
-                            + playlist.trackCount
-                            + " canciones"
-                            : "";
+                    if (viewportHeight <= 0) {
+                        return;
+                    }
 
+                    android.view.ViewGroup.LayoutParams
+                            rootParams =
+                            root.getLayoutParams();
 
-            open.setText(
-                    "🎧 "
-                            + playlist.name
-                            + count
-            );
+                    if (rootParams == null) {
+                        rootParams =
+                                new android.view.ViewGroup.LayoutParams(
+                                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                        viewportHeight
+                                );
+                    }
 
-            /*
-             * Persiana horizontal:
-             * el nombre largo se desplaza dentro del botón
-             * y nunca se sale de los límites de la pantalla.
-             */
-            open.setSingleLine(true);
+                    rootParams.width =
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 
-            open.setEllipsize(
-                    android.text.TextUtils.TruncateAt.MARQUEE
-            );
+                    rootParams.height =
+                            viewportHeight;
 
-            open.setMarqueeRepeatLimit(
-                    -1
-            );
+                    root.setLayoutParams(
+                            rootParams
+                    );
 
-            open.setSelected(true);
+                    /*
+                     * Evitamos cualquier desplazamiento residual
+                     * del ScrollView exterior.
+                     */
+                    spotifyTabScroll.scrollTo(
+                            0,
+                            0
+                    );
 
-            open.setHorizontallyScrolling(true);
-
-            open.setOnClickListener(
-                    v -> loadSpotifyPlaylist(
-                            playlist.id
-                    )
-            );
-
-
-            row.addView(
-                    open
-            );
-
-
-            Button delete =
-                    roundedButton();
-
-            delete.setText(
-                    "🗑 Borrar"
-            );
-
-
-            delete.setOnClickListener(
-                    v -> deleteSpotifyPlaylist(
-                            playlist
-                    )
-            );
-
-
-            row.addView(
-                    delete
-            );
-
-
-            contentLayout.addView(
-                    row
-            );
-        }
+                    root.requestLayout();
+                }
+        );
     }
 
     private void loadSpotifyPlaylist(
@@ -12074,11 +12394,10 @@ Toast.makeText(
         if (item != null) {
 
             /*
-             * Mostrar el mini-player solamente cuando no haya sido
-             * cerrado ni minimizado manualmente por el usuario.
+             * Mostrar el mini-player salvo que esté
+             * minimizado manualmente.
              */
-            if (!playerManuallyClosed &&
-                    !playerMinimized) {
+            if (!playerMinimized) {
 
                 player.setVisibility(
                         android.view.View.VISIBLE
@@ -12090,7 +12409,7 @@ Toast.makeText(
                     );
                 }
 
-            } else if (playerMinimized) {
+            } else {
 
                 player.setVisibility(
                         android.view.View.GONE
@@ -12133,12 +12452,24 @@ Toast.makeText(
             Uri artworkUri =
                     item.mediaMetadata.artworkUri;
 
+            Uri currentUri = null;
+
+            if (item.localConfiguration != null) {
+                currentUri =
+                        item.localConfiguration.uri;
+            }
+
             Log.d(
                     "PLAYER_ARTWORK",
                     "artworkUri=" +
                             (artworkUri == null
                                     ? "NULL"
                                     : artworkUri.toString())
+                            +
+                            " currentUri=" +
+                            (currentUri == null
+                                    ? "NULL"
+                                    : currentUri.toString())
             );
 
             String artwork =
@@ -12146,11 +12477,75 @@ Toast.makeText(
                             ? ""
                             : artworkUri.toString();
 
-            if (!artwork.equals(playerArtworkLoaded)) {
+            /*
+             * Las canciones Offline utilizan normalmente
+             * content:// como URI. Para ellas reutilizamos
+             * el sistema permanente de portadas Offline.
+             */
+            boolean isOffline =
+                    currentUri != null &&
+                    "content".equalsIgnoreCase(
+                            currentUri.getScheme()
+                    );
 
-                playerArtworkLoaded = artwork;
+            /*
+             * Usamos una clave diferente para cada archivo
+             * Offline para evitar conservar la portada de
+             * la canción anterior.
+             */
+            String artworkCacheKey =
+                    isOffline
+                            ? "offline:" +
+                                    currentUri.toString()
+                            : artwork;
 
-                if (!artwork.isEmpty()) {
+            if (!artworkCacheKey.equals(
+                    playerArtworkLoaded)) {
+
+                playerArtworkLoaded =
+                        artworkCacheKey;
+
+                if (isOffline) {
+
+                    String thumbnail =
+                            artwork;
+
+                    String videoId = "";
+
+                    String youtubePrefix =
+                            "https://i.ytimg.com/vi/";
+
+                    if (thumbnail.startsWith(
+                            youtubePrefix
+                    )) {
+
+                        int videoStart =
+                                youtubePrefix.length();
+
+                        int videoEnd =
+                                thumbnail.indexOf(
+                                        "/",
+                                        videoStart
+                                );
+
+                        if (videoEnd > videoStart) {
+
+                            videoId =
+                                    thumbnail.substring(
+                                            videoStart,
+                                            videoEnd
+                                    );
+                        }
+                    }
+
+                    loadOfflineThumbnail(
+                            thumbnail,
+                            videoId,
+                            currentUri,
+                            playerArtwork
+                    );
+
+                } else if (!artwork.isEmpty()) {
 
                     loadThumbnail(
                             artwork,
@@ -12646,9 +13041,17 @@ private JSONArray scanOfflineFolder() {
             String name =
                     file.getName();
 
-            if (name == null
-                    || !name.toLowerCase()
-                    .endsWith(".mp3")) {
+            if (name == null) {
+                continue;
+            }
+
+            String lowerName =
+                    name.toLowerCase(
+                            java.util.Locale.ROOT
+                    );
+
+            if (!lowerName.endsWith(".mp3") &&
+                    !lowerName.endsWith(".opus")) {
                 continue;
             }
 
@@ -12659,11 +13062,24 @@ private JSONArray scanOfflineFolder() {
                 continue;
             }
 
-            String title =
-                    name.substring(
-                            0,
-                            name.length() - 4
-                    );
+            String title = name;
+
+            if (lowerName.endsWith(".mp3")) {
+
+                title =
+                        name.substring(
+                                0,
+                                name.length() - 4
+                        );
+
+            } else if (lowerName.endsWith(".opus")) {
+
+                title =
+                        name.substring(
+                                0,
+                                name.length() - 5
+                        );
+            }
 
             JSONObject item =
                     new JSONObject();
@@ -12712,6 +13128,105 @@ private JSONArray scanOfflineFolder() {
                     "thumbnail",
                     ""
             );
+
+            /*
+             * Reconstruir metadatos directamente desde el
+             * MP3/Opus. Esto permite recuperar la información
+             * después de reinstalar la APK, aunque se hayan
+             * perdido las SharedPreferences.
+             */
+            android.media.MediaMetadataRetriever retriever =
+                    new android.media.MediaMetadataRetriever();
+
+            try {
+
+                retriever.setDataSource(
+                        this,
+                        file.getUri()
+                );
+
+                String metadataTitle =
+                        retriever.extractMetadata(
+                                android.media.MediaMetadataRetriever
+                                        .METADATA_KEY_TITLE
+                        );
+
+                String metadataArtist =
+                        retriever.extractMetadata(
+                                android.media.MediaMetadataRetriever
+                                        .METADATA_KEY_ARTIST
+                        );
+
+                String metadataAlbum =
+                        retriever.extractMetadata(
+                                android.media.MediaMetadataRetriever
+                                        .METADATA_KEY_ALBUM
+                        );
+
+                String metadataDuration =
+                        retriever.extractMetadata(
+                                android.media.MediaMetadataRetriever
+                                        .METADATA_KEY_DURATION
+                        );
+
+                if (metadataTitle != null &&
+                        !metadataTitle.trim().isEmpty()) {
+
+                    item.put(
+                            "title",
+                            metadataTitle.trim()
+                    );
+                }
+
+                if (metadataArtist != null &&
+                        !metadataArtist.trim().isEmpty()) {
+
+                    item.put(
+                            "artist",
+                            metadataArtist.trim()
+                    );
+                }
+
+                if (metadataAlbum != null &&
+                        !metadataAlbum.trim().isEmpty()) {
+
+                    item.put(
+                            "album",
+                            metadataAlbum.trim()
+                    );
+                }
+
+                if (metadataDuration != null &&
+                        !metadataDuration.trim().isEmpty()) {
+
+                    try {
+
+                        long durationMs =
+                                Long.parseLong(
+                                        metadataDuration.trim()
+                                );
+
+                        if (durationMs > 0) {
+
+                            item.put(
+                                    "duration",
+                                    durationMs / 1000L
+                            );
+                        }
+
+                    } catch (Exception ignored) {
+                    }
+                }
+
+            } catch (Exception ignored) {
+
+            } finally {
+
+                try {
+                    retriever.release();
+                } catch (Exception ignored) {
+                }
+            }
 
             library.put(item);
 
@@ -13269,6 +13784,63 @@ private void showOfflineLibrary() {
 
     contentLayout.addView(title);
 
+    /*
+     * ============================================================
+     * CARPETA DE MÚSICA OFFLINE
+     * ============================================================
+     *
+     * Permite cambiar en cualquier momento la carpeta donde se
+     * guardan los archivos descargados para uso offline.
+     *
+     * Se reutiliza chooseOfflineFolder(), que ya gestiona:
+     * - ACTION_OPEN_DOCUMENT_TREE
+     * - permisos persistentes
+     * - offline_folder_uri
+     */
+    Button chooseFolder =
+            visualButton(
+                    "📁  Elegir carpeta de música"
+            );
+
+    chooseFolder.setTextSize(13);
+    chooseFolder.setTextColor(
+            Color.rgb(230, 230, 238)
+    );
+
+    chooseFolder.setBackground(
+            roundedBackground(
+                    Color.rgb(38, 38, 48),
+                    Color.rgb(82, 82, 100),
+                    18
+            )
+    );
+
+    chooseFolder.setElevation(
+            dp(5)
+    );
+
+    LinearLayout.LayoutParams chooseFolderParams =
+            new LinearLayout.LayoutParams(
+                    -1,
+                    dp(48)
+            );
+
+    chooseFolderParams.setMargins(
+            dp(8),
+            0,
+            dp(8),
+            dp(10)
+    );
+
+    chooseFolder.setOnClickListener(
+            v -> chooseOfflineFolder()
+    );
+
+    contentLayout.addView(
+            chooseFolder,
+            chooseFolderParams
+    );
+
     JSONArray library =
             scanOfflineFolder();
 
@@ -13820,6 +14392,7 @@ private void showOfflineLibrary() {
             loadOfflineThumbnail(
                     thumbnail,
                     videoId,
+                    uri,
                     cover
             );
 
