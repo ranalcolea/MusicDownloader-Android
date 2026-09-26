@@ -6529,8 +6529,193 @@ Toast.makeText(
         });
     }
 
+    /*
+     * ============================================================
+     * CACHÉ LOCAL DE LISTAS DE SPOTIFY
+     * ============================================================
+     *
+     * Las listas se muestran inmediatamente desde la última copia
+     * guardada mientras se consulta el servidor en segundo plano.
+     *
+     * Solo se cachean los datos básicos de las listas. Las pistas
+     * siguen cargándose desde el servidor cuando se abre una lista.
+     */
+    private static final String SPOTIFY_LISTS_CACHE =
+            "spotify_saved_lists_cache";
+
+    private List<ApiClient.SpotifyPlaylist> loadSpotifyListsCache() {
+
+        List<ApiClient.SpotifyPlaylist> lists =
+                new ArrayList<>();
+
+        try {
+
+            android.content.SharedPreferences prefs =
+                    getSharedPreferences(
+                            "music_downloader",
+                            MODE_PRIVATE
+                    );
+
+            String cached =
+                    prefs.getString(
+                            SPOTIFY_LISTS_CACHE,
+                            ""
+                    );
+
+            if (cached == null ||
+                    cached.trim().isEmpty()) {
+                return lists;
+            }
+
+            JSONArray array =
+                    new JSONArray(cached);
+
+            for (int i = 0;
+                 i < array.length();
+                 i++) {
+
+                JSONObject item =
+                        array.optJSONObject(i);
+
+                if (item == null) {
+                    continue;
+                }
+
+                ApiClient.SpotifyPlaylist playlist =
+                        new ApiClient.SpotifyPlaylist();
+
+                playlist.id =
+                        item.optString(
+                                "id",
+                                ""
+                        );
+
+                playlist.name =
+                        item.optString(
+                                "name",
+                                ""
+                        );
+
+                playlist.url =
+                        item.optString(
+                                "url",
+                                ""
+                        );
+
+                playlist.trackCount =
+                        item.optInt(
+                                "trackCount",
+                                0
+                        );
+
+                lists.add(playlist);
+            }
+
+        } catch (Exception e) {
+
+            Log.w(
+                    "MusicDownloaderSpotify",
+                    "No se pudo leer la caché de listas",
+                    e
+            );
+        }
+
+        return lists;
+    }
+
+
+    private void saveSpotifyListsCache(
+            List<ApiClient.SpotifyPlaylist> lists) {
+
+        try {
+
+            JSONArray array =
+                    new JSONArray();
+
+            if (lists != null) {
+
+                for (ApiClient.SpotifyPlaylist playlist :
+                        lists) {
+
+                    if (playlist == null) {
+                        continue;
+                    }
+
+                    JSONObject item =
+                            new JSONObject();
+
+                    item.put(
+                            "id",
+                            playlist.id != null
+                                    ? playlist.id
+                                    : ""
+                    );
+
+                    item.put(
+                            "name",
+                            playlist.name != null
+                                    ? playlist.name
+                                    : ""
+                    );
+
+                    item.put(
+                            "url",
+                            playlist.url != null
+                                    ? playlist.url
+                                    : ""
+                    );
+
+                    item.put(
+                            "trackCount",
+                            playlist.trackCount
+                    );
+
+                    array.put(item);
+                }
+            }
+
+            android.content.SharedPreferences prefs =
+                    getSharedPreferences(
+                            "music_downloader",
+                            MODE_PRIVATE
+                    );
+
+            prefs.edit()
+                    .putString(
+                            SPOTIFY_LISTS_CACHE,
+                            array.toString()
+                    )
+                    .apply();
+
+        } catch (Exception e) {
+
+            Log.w(
+                    "MusicDownloaderSpotify",
+                    "No se pudo guardar la caché de listas",
+                    e
+            );
+        }
+    }
+
+
     private void loadSpotifyLists() {
 
+        /*
+         * Primero mostramos inmediatamente la última copia local.
+         */
+        List<ApiClient.SpotifyPlaylist> cachedLists =
+                loadSpotifyListsCache();
+
+        if (cachedLists != null &&
+                !cachedLists.isEmpty()) {
+
+            showSpotifyLists(cachedLists);
+        }
+
+        /*
+         * Después actualizamos desde el servidor sin bloquear
+         * la interfaz.
+         */
         executor.execute(() -> {
 
             try {
@@ -6538,15 +6723,25 @@ Toast.makeText(
                 List<ApiClient.SpotifyPlaylist> lists =
                         api().getSpotifyLists();
 
+                saveSpotifyListsCache(lists);
+
                 handler.post(
                         () -> showSpotifyLists(lists)
                 );
 
             } catch (Exception e) {
 
-                handler.post(
-                        () -> showError(e)
-                );
+                /*
+                 * Si falla la conexión y ya había caché,
+                 * simplemente conservamos lo mostrado.
+                 */
+                if (cachedLists == null ||
+                        cachedLists.isEmpty()) {
+
+                    handler.post(
+                            () -> showError(e)
+                    );
+                }
             }
         });
     }

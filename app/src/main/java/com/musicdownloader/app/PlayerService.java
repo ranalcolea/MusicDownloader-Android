@@ -52,6 +52,29 @@ public class PlayerService extends MediaSessionService {
 
         player.setHandleAudioBecomingNoisy(true);
 
+        player.addListener(new androidx.media3.common.Player.Listener() {
+            @Override
+            public void onPlayerError(androidx.media3.common.PlaybackException error) {
+                MediaItem item = player.getCurrentMediaItem();
+
+                String uri = "null";
+                if (item != null &&
+                        item.localConfiguration != null &&
+                        item.localConfiguration.uri != null) {
+                    uri = item.localConfiguration.uri.toString();
+                }
+
+                android.util.Log.e(
+                        "MusicDownloaderPlayer",
+                        "PLAYBACK ERROR"
+                                + " code=" + error.errorCode
+                                + " message=" + error.getMessage()
+                                + " uri=" + uri,
+                        error
+                );
+            }
+        });
+
         Intent intent =
                 new Intent(
                         this,
