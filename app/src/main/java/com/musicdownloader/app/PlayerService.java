@@ -17,6 +17,7 @@ import androidx.media3.session.SessionResult;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class PlayerService extends MediaSessionService {
@@ -150,19 +151,88 @@ public class PlayerService extends MediaSessionService {
                                 if (COMMAND_ADD_QUEUE.equals(
                                         customCommand.customAction)) {
 
-                                    List<MediaItem> items =
-                                            QueueRepository.getQueue();
+                                    ArrayList<MediaItem> newItems =
+                                            new ArrayList<>();
 
-                                    int currentCount =
-                                            player.getMediaItemCount();
+                                    int count =
+                                            args.getInt(
+                                                    "queue_item_count",
+                                                    0
+                                            );
 
-                                    if (items.size() > currentCount) {
+                                    for (int i = 0; i < count; i++) {
 
-                                        List<MediaItem> newItems =
-                                                items.subList(
-                                                        currentCount,
-                                                        items.size()
+                                        String prefix =
+                                                "queue_item_" + i + "_";
+
+                                        String uri =
+                                                args.getString(
+                                                        prefix + "uri"
                                                 );
+
+                                        if (uri == null ||
+                                                uri.trim().isEmpty()) {
+                                            continue;
+                                        }
+
+                                        androidx.media3.common.MediaMetadata.Builder
+                                                metadataBuilder =
+                                                new androidx.media3.common.MediaMetadata.Builder();
+
+                                        String title =
+                                                args.getString(
+                                                        prefix + "title"
+                                                );
+
+                                        String artist =
+                                                args.getString(
+                                                        prefix + "artist"
+                                                );
+
+                                        String album =
+                                                args.getString(
+                                                        prefix + "album"
+                                                );
+
+                                        String artwork =
+                                                args.getString(
+                                                        prefix + "artwork"
+                                                );
+
+                                        if (title != null) {
+                                            metadataBuilder.setTitle(title);
+                                        }
+
+                                        if (artist != null) {
+                                            metadataBuilder.setArtist(artist);
+                                        }
+
+                                        if (album != null) {
+                                            metadataBuilder.setAlbumTitle(album);
+                                        }
+
+                                        if (artwork != null &&
+                                                !artwork.trim().isEmpty()) {
+
+                                            metadataBuilder.setArtworkUri(
+                                                    android.net.Uri.parse(
+                                                            artwork
+                                                    )
+                                            );
+                                        }
+
+                                        MediaItem item =
+                                                new MediaItem.Builder()
+                                                        .setUri(uri)
+                                                        .setMediaMetadata(
+                                                                metadataBuilder.build()
+                                                        )
+                                                        .build();
+
+                                        newItems.add(item);
+                                    }
+
+                                    if (!newItems.isEmpty()) {
 
                                         player.addMediaItems(
                                                 newItems

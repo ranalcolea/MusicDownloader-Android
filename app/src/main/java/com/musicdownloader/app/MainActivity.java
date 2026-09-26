@@ -2137,7 +2137,69 @@ public class MainActivity extends android.app.Activity {
             return;
         }
 
+        /*
+         * La cola real que ya está reproduciendo Media3 no se
+         * calcula mediante getMediaItemCount().
+         *
+         * Enviamos exactamente los elementos que esta llamada
+         * quiere añadir. Así varias resoluciones simultáneas
+         * no pueden provocar duplicados.
+         */
         QueueRepository.addItems(items);
+
+        Bundle args = new Bundle();
+
+        args.putInt(
+                "queue_item_count",
+                items.size()
+        );
+
+        for (int i = 0; i < items.size(); i++) {
+
+            MediaItem item = items.get(i);
+
+            String prefix =
+                    "queue_item_" + i + "_";
+
+            args.putString(
+                    prefix + "uri",
+                    item.localConfiguration != null &&
+                    item.localConfiguration.uri != null
+                            ? item.localConfiguration.uri.toString()
+                            : null
+            );
+
+            MediaMetadata metadata =
+                    item.mediaMetadata;
+
+            args.putString(
+                    prefix + "title",
+                    metadata.title != null
+                            ? metadata.title.toString()
+                            : null
+            );
+
+            args.putString(
+                    prefix + "artist",
+                    metadata.artist != null
+                            ? metadata.artist.toString()
+                            : null
+            );
+
+            args.putString(
+                    prefix + "album",
+                    metadata.albumTitle != null
+                            ? metadata.albumTitle.toString()
+                            : null
+            );
+
+            args.putString(
+                    prefix + "artwork",
+                    metadata.artworkUri != null
+                            ? metadata.artworkUri.toString()
+                            : null
+            );
+        }
 
         SessionCommand command =
                 new SessionCommand(
@@ -2147,7 +2209,7 @@ public class MainActivity extends android.app.Activity {
 
         mediaController.sendCustomCommand(
                 command,
-                Bundle.EMPTY
+                args
         );
     }
 
@@ -6035,6 +6097,9 @@ private void loadThumbnail(
                         ? album.tracks.size()
                         : 0;
 
+        final long playbackGeneration =
+                beginIndividualPlayback();
+
         final long queueGeneration =
                 beginQueuePreparation(
                         albumTotal
@@ -6169,6 +6234,11 @@ Toast.makeText(
 
                         handler.post(() -> {
 
+                            if (!isCurrentIndividualPlayback(
+                                    playbackGeneration)) {
+                                return;
+                            }
+
                             List<MediaItem> first =
                                     new ArrayList<>();
 
@@ -6184,9 +6254,15 @@ Toast.makeText(
 
                         next.add(item);
 
-                        handler.post(() ->
-                                addItemsToPlayerQueue(next)
-                        );
+                        handler.post(() -> {
+
+                            if (!isCurrentIndividualPlayback(
+                                    playbackGeneration)) {
+                                return;
+                            }
+
+                            addItemsToPlayerQueue(next);
+                        });
                     }
 
                 } catch (Exception trackError) {
