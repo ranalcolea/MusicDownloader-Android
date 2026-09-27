@@ -31,6 +31,7 @@ public class ApiClient {
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(30000);
             conn.setRequestProperty("Accept", "application/json");
+            conn.setRequestProperty("Connection", "close");
 
             int code = conn.getResponseCode();
 
@@ -55,6 +56,7 @@ public class ApiClient {
             conn.setReadTimeout(60000);
             conn.setDoOutput(true);
             conn.setRequestProperty("Accept", "application/json");
+            conn.setRequestProperty("Connection", "close");
             conn.setRequestProperty(
                     "Content-Type",
                     "application/json; charset=UTF-8"

@@ -27,6 +27,7 @@ import android.widget.CheckBox;
 import android.widget.ProgressBar;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -84,12 +85,14 @@ public class MainActivity extends android.app.Activity {
     private TextView serverStatus;
     private LinearLayout serverCard;
     private EditText searchInput;
+
+    private LinearLayout searchCard;
     private LinearLayout contentLayout;
 
     // Contenedores visuales de la nueva navegación
     private LinearLayout rootLayout;
     private android.widget.FrameLayout contentFrame;
-    private LinearLayout bottomNavigation;
+    private HorizontalScrollView bottomNavigation;
 
     /*
      * CONTENEDORES PERSISTENTES DE LAS PESTAÑAS
@@ -100,6 +103,18 @@ public class MainActivity extends android.app.Activity {
     private ScrollView downloadsTabScroll;
 
     private LinearLayout mainTabLayout;
+
+    /*
+     * Estado temporal de Música mientras se muestra Favoritos.
+     *
+     * Guardamos las Views actuales para restaurarlas exactamente
+     * al volver a Música, sin repetir la búsqueda.
+     */
+    private final java.util.ArrayList<android.view.View>
+            savedMusicViews =
+                    new java.util.ArrayList<>();
+
+    private int savedMusicScrollY = 0;
     private LinearLayout spotifyTabLayout;
     private LinearLayout offlineTabLayout;
     private LinearLayout downloadsTabLayout;
@@ -116,6 +131,12 @@ public class MainActivity extends android.app.Activity {
      */
     private List<ApiClient.Album> lastAlbumSearchResults =
             new ArrayList<>();
+
+    /*
+     * Estado de Álbumes para poder restaurarlo al girar
+     * el teléfono sin volver a perder la pantalla actual.
+     */
+    private ApiClient.Album currentOpenedAlbum = null;
 
     /*
      * Estado visual de preparación de cada pista.
@@ -153,7 +174,34 @@ public class MainActivity extends android.app.Activity {
      * El usuario puede minimizar el mini-player sin detener
      * la reproducción. El botón flotante permite restaurarlo.
      */
-    private boolean playerMinimized = false;
+    /*
+ * ============================================================
+ * FAVORITOS
+ * ============================================================
+ */
+
+private static final String FAVORITES_PREFS =
+        "favorites";
+
+private static final String FAVORITES_KEY =
+        "items";
+
+private boolean showingFavorites = false;
+
+/*
+ * Pantalla actualmente visible.
+ *
+ * Se guarda durante la recreación de MainActivity para que
+ * al girar el teléfono permanezcamos en la misma sección.
+ */
+private String currentScreen = "music";
+private String screenBeforeOffline = "music";
+
+    private final List<TextView>
+            favoritePreparationStatusViews =
+            new ArrayList<>();
+
+private boolean playerMinimized = false;
 
     private Button restorePlayerButton;
 
@@ -195,7 +243,257 @@ public class MainActivity extends android.app.Activity {
 
         buildUi();
 
-        String savedOfflineFolder =
+        /*
+         * Restauramos los resultados de la búsqueda después
+         * de construir la interfaz. Así, al girar el teléfono,
+         * Android puede recrear MainActivity sin perderlos.
+         */
+        if (savedInstanceState != null) {
+
+            String savedSearchQuery =
+                    savedInstanceState.getString(
+                            "saved_search_query",
+                            ""
+                    );
+
+            if (searchInput != null &&
+                    !savedSearchQuery.isEmpty()) {
+
+                searchInput.setText(
+                        savedSearchQuery
+                );
+            }
+
+            String savedSearchJson =
+                    savedInstanceState.getString(
+                            "saved_search_results",
+                            ""
+                    );
+
+            if (savedSearchJson != null &&
+                    !savedSearchJson.isEmpty()) {
+
+                try {
+
+                    JSONArray array =
+                            new JSONArray(
+                                    savedSearchJson
+                            );
+
+                    List<ApiClient.Song> restoredSongs =
+                            new ArrayList<>();
+
+                    for (int i = 0;
+                            i < array.length();
+                            i++) {
+
+                        JSONObject item =
+                                array.optJSONObject(i);
+
+                        if (item == null) continue;
+
+                        ApiClient.Song song =
+                                new ApiClient.Song();
+
+                        song.number =
+                                item.optInt(
+                                        "number",
+                                        0
+                                );
+
+                        song.id =
+                                item.optString(
+                                        "id",
+                                        ""
+                                );
+
+                        song.videoId =
+                                item.optString(
+                                        "videoId",
+                                        ""
+                                );
+
+                        song.title =
+                                item.optString(
+                                        "title",
+                                        ""
+                                );
+
+                        song.artist =
+                                item.optString(
+                                        "artist",
+                                        ""
+                                );
+
+                        song.channel =
+                                item.optString(
+                                        "channel",
+                                        ""
+                                );
+
+                        song.album =
+                                item.optString(
+                                        "album",
+                                        ""
+                                );
+
+                        song.thumbnail =
+                                item.optString(
+                                        "thumbnail",
+                                        ""
+                                );
+
+                        song.duration =
+                                item.optInt(
+                                        "duration",
+                                        0
+                                );
+
+                        restoredSongs.add(
+                                song
+                        );
+                    }
+
+                    currentSearchSongs =
+                            restoredSongs;
+
+                    currentSearchPage =
+                            savedInstanceState.getInt(
+                                    "saved_search_page",
+                                    0
+                            );
+
+                    /*
+                     * Volvemos a pintar exactamente los resultados
+                     * que estaban visibles antes de girar.
+                     */
+                    if (!restoredSongs.isEmpty()) {
+
+                        renderSearchSongsPage();
+                    }
+
+                } catch (Exception ignored) {
+                    currentSearchSongs =
+                            new ArrayList<>();
+
+                    currentSearchPage = 0;
+                }
+            }
+        }
+
+        /*
+     * Restauramos el estado de Álbumes después de construir
+     * toda la interfaz.
+     */
+    if (savedInstanceState != null) {
+
+        String savedAlbumsJson =
+                savedInstanceState.getString(
+                        "saved_album_search_results",
+                        ""
+                );
+
+        if (savedAlbumsJson != null &&
+                !savedAlbumsJson.isEmpty()) {
+
+            try {
+
+                JSONArray savedAlbums =
+                        new JSONArray(
+                                savedAlbumsJson
+                        );
+
+                List<ApiClient.Album>
+                        restoredAlbums =
+                        new ArrayList<>();
+
+                for (int i = 0;
+                        i < savedAlbums.length();
+                        i++) {
+
+                    JSONObject item =
+                            savedAlbums.optJSONObject(i);
+
+                    if (item == null) continue;
+
+                    ApiClient.Album album =
+                            albumFromJson(
+                                    item,
+                                    false
+                            );
+
+                    if (album != null) {
+                        restoredAlbums.add(album);
+                    }
+                }
+
+                lastAlbumSearchResults =
+                        restoredAlbums;
+
+            } catch (Exception ignored) {
+
+                lastAlbumSearchResults =
+                        new ArrayList<>();
+            }
+        }
+
+        String savedOpenedAlbumJson =
+                savedInstanceState.getString(
+                        "saved_opened_album",
+                        ""
+                );
+
+        if (savedOpenedAlbumJson != null &&
+                !savedOpenedAlbumJson.isEmpty()) {
+
+            try {
+
+                currentOpenedAlbum =
+                        albumFromJson(
+                                new JSONObject(
+                                        savedOpenedAlbumJson
+                                ),
+                                true
+                        );
+
+            } catch (Exception ignored) {
+
+                currentOpenedAlbum = null;
+            }
+        }
+    }
+
+    /*
+     * Si la pantalla restaurada era Álbumes,
+     * reconstruimos exactamente esa pantalla.
+     *
+     * No hacemos una nueva búsqueda.
+     */
+    if (savedInstanceState != null) {
+
+        String restoredScreen =
+                savedInstanceState.getString(
+                        "saved_current_screen",
+                        "music"
+                );
+
+        if ("albums".equals(restoredScreen) &&
+                lastAlbumSearchResults != null) {
+
+            showAlbums(
+                    lastAlbumSearchResults
+            );
+
+        } else if ("album".equals(restoredScreen) &&
+                currentOpenedAlbum != null) {
+
+            showAlbum(
+                    currentOpenedAlbum
+            );
+        }
+    }
+
+    String savedOfflineFolder =
                 getSharedPreferences(
                         "settings",
                         MODE_PRIVATE
@@ -223,6 +521,54 @@ public class MainActivity extends android.app.Activity {
                 () -> connectMediaController(),
                 500
         );
+
+        /*
+         * Restauramos la pantalla que estaba visible antes
+         * de que Android recreara MainActivity.
+         */
+        if (savedInstanceState != null) {
+
+            String restoredScreen =
+                    savedInstanceState.getString(
+                            "saved_current_screen",
+                            "music"
+                    );
+
+            if ("spotify".equals(restoredScreen)) {
+
+                showSpotifyHome();
+
+            } else if ("offline".equals(restoredScreen)) {
+
+                showOfflineLibrary();
+
+            } else if ("downloads".equals(restoredScreen)) {
+
+                showDownloads();
+
+            } else if ("favorites".equals(restoredScreen)) {
+
+                showFavorites();
+
+            } else if ("albums".equals(restoredScreen) &&
+                    lastAlbumSearchResults != null) {
+
+                showAlbums(
+                        lastAlbumSearchResults
+                );
+
+            } else if ("album".equals(restoredScreen) &&
+                    currentOpenedAlbum != null) {
+
+                showAlbum(
+                        currentOpenedAlbum
+                );
+
+            } else {
+
+                showMainHome();
+            }
+        }
     }
 
     private void buildUi() {
@@ -290,21 +636,14 @@ public class MainActivity extends android.app.Activity {
          */
 
         bottomNavigation =
-                new LinearLayout(this);
+                new HorizontalScrollView(this);
 
-        bottomNavigation.setOrientation(
-                LinearLayout.HORIZONTAL
+        bottomNavigation.setHorizontalScrollBarEnabled(
+                false
         );
 
-        bottomNavigation.setGravity(
-                Gravity.CENTER
-        );
-
-        bottomNavigation.setPadding(
-                dp(8),
-                dp(6),
-                dp(8),
-                dp(6)
+        bottomNavigation.setFillViewport(
+                false
         );
 
         bottomNavigation.setBackground(
@@ -319,6 +658,24 @@ public class MainActivity extends android.app.Activity {
                 dp(8)
         );
 
+        LinearLayout navigationRow =
+                new LinearLayout(this);
+
+        navigationRow.setOrientation(
+                LinearLayout.HORIZONTAL
+        );
+
+        navigationRow.setGravity(
+                Gravity.CENTER_VERTICAL
+        );
+
+        navigationRow.setPadding(
+                dp(8),
+                dp(6),
+                dp(8),
+                dp(6)
+        );
+
         Button musicTab =
                 visualButton("🎵 Música");
 
@@ -331,11 +688,16 @@ public class MainActivity extends android.app.Activity {
         Button downloadsTab =
                 visualButton("🔗 Conexiones");
 
+        Button favoritesTab =
+                visualButton("⭐ Favoritos");
+
+        int navButtonWidth =
+                dp(125);
+
         LinearLayout.LayoutParams navButtonParams =
                 new LinearLayout.LayoutParams(
-                        0,
-                        dp(48),
-                        1f
+                        navButtonWidth,
+                        dp(48)
                 );
 
         navButtonParams.setMargins(
@@ -345,36 +707,63 @@ public class MainActivity extends android.app.Activity {
                 0
         );
 
-        bottomNavigation.addView(
+        navigationRow.addView(
                 musicTab,
                 new LinearLayout.LayoutParams(
                         navButtonParams
                 )
         );
 
-        bottomNavigation.addView(
+        navigationRow.addView(
                 spotifyTab,
                 new LinearLayout.LayoutParams(
                         navButtonParams
                 )
         );
 
-        bottomNavigation.addView(
+        navigationRow.addView(
                 offlineTab,
                 new LinearLayout.LayoutParams(
                         navButtonParams
                 )
         );
 
-        bottomNavigation.addView(
+        navigationRow.addView(
                 downloadsTab,
                 new LinearLayout.LayoutParams(
                         navButtonParams
                 )
         );
 
+        navigationRow.addView(
+                favoritesTab,
+                new LinearLayout.LayoutParams(
+                        navButtonParams
+                )
+        );
+
         musicTab.setOnClickListener(
-                v -> showMainHome()
+                v -> {
+
+                    if ("albums".equals(screenBeforeOffline) &&
+                            lastAlbumSearchResults != null) {
+
+                        showAlbums(
+                                lastAlbumSearchResults
+                        );
+
+                    } else if ("album".equals(screenBeforeOffline) &&
+                            currentOpenedAlbum != null) {
+
+                        showAlbum(
+                                currentOpenedAlbum
+                        );
+
+                    } else {
+
+                        showMainHome();
+                    }
+                }
         );
 
         spotifyTab.setOnClickListener(
@@ -389,6 +778,17 @@ public class MainActivity extends android.app.Activity {
                 v -> showDownloads()
         );
 
+        favoritesTab.setOnClickListener(
+                v -> showFavorites()
+        );
+
+        bottomNavigation.addView(
+                navigationRow,
+                new HorizontalScrollView.LayoutParams(
+                        -2,
+                        -1
+                )
+        );
 
         root.addView(
                 bottomNavigation,
@@ -705,7 +1105,7 @@ public class MainActivity extends android.app.Activity {
          * ============================================================
          */
 
-        LinearLayout searchCard =
+        searchCard =
                 new LinearLayout(this);
 
         searchCard.setOrientation(
@@ -1707,6 +2107,60 @@ public class MainActivity extends android.app.Activity {
                 )
         );
 
+        /*
+         * BOTÓN COLA
+         *
+         * Solo abre la interfaz de gestión de la cola actual.
+         * No modifica la lógica de generación ni reproducción.
+         */
+        Button queueButton =
+                roundedButton();
+
+        queueButton.setText(
+                "☰  Cola"
+        );
+
+        queueButton.setTextSize(
+                12
+        );
+
+        queueButton.setMinHeight(
+                dp(42)
+        );
+
+        queueButton.setMinWidth(
+                dp(76)
+        );
+
+        queueButton.setPadding(
+                dp(6),
+                0,
+                dp(6),
+                0
+        );
+
+        queueButton.setOnClickListener(
+                v -> showQueueDialog()
+        );
+
+        LinearLayout.LayoutParams queueButtonParams =
+                new LinearLayout.LayoutParams(
+                        dp(76),
+                        dp(42)
+                );
+
+        queueButtonParams.setMargins(
+                dp(8),
+                0,
+                0,
+                0
+        );
+
+        controls.addView(
+                queueButton,
+                queueButtonParams
+        );
+
         player.addView(
                 controls
         );
@@ -1997,6 +2451,8 @@ public class MainActivity extends android.app.Activity {
 
     private void showMainHome() {
 
+        currentScreen = "music";
+
         if (rootLayout == null ||
                 mainTabLayout == null ||
                 mainTabScroll == null) {
@@ -2009,13 +2465,51 @@ public class MainActivity extends android.app.Activity {
                 true
         );
 
-        /*
-         * Solo construimos los resultados la primera vez.
-         *
-         * Al volver desde otra pestaña NO se ejecuta
-         * removeAllViews(), por lo que los DownloadSlot
-         * siguen siendo los mismos objetos.
-         */
+        if (showingFavorites) {
+            showingFavorites = false;
+
+            if (searchCard != null) {
+                searchCard.setVisibility(
+                        android.view.View.VISIBLE
+                );
+            }
+
+            /*
+             * Eliminamos las Views de Favoritos y devolvemos
+             * exactamente las Views que tenía Música.
+             */
+            mainTabLayout.removeAllViews();
+
+            for (android.view.View view :
+                    savedMusicViews) {
+
+                mainTabLayout.addView(view);
+            }
+
+            savedMusicViews.clear();
+
+            /*
+             * Recuperamos también la posición del scroll.
+             */
+            if (mainTabScroll != null) {
+
+                mainTabScroll.post(() ->
+                        mainTabScroll.scrollTo(
+                                0,
+                                savedMusicScrollY
+                        )
+                );
+            }
+
+            return;
+        }
+
+        if (searchCard != null) {
+            searchCard.setVisibility(
+                    android.view.View.VISIBLE
+            );
+        }
+
         if (mainTabLayout.getChildCount() == 0 &&
                 currentSearchSongs != null &&
                 !currentSearchSongs.isEmpty()) {
@@ -2213,7 +2707,2720 @@ public class MainActivity extends android.app.Activity {
         );
     }
 
-    private void saveServerUrl() {
+    
+/*
+ * ============================================================
+ * FAVORITOS - DATOS
+ * ============================================================
+ */
+
+/*
+ * ============================================================
+ * FAVORITOS - PANTALLA
+ * ============================================================
+ */
+
+private void showFavorites() {
+
+    currentScreen = "favorites";
+
+    if (mainTabLayout == null ||
+            mainTabScroll == null) {
+        return;
+    }
+
+    /*
+     * Guardamos las Views actuales de Música antes de que
+     * Favoritos utilice temporalmente este mismo contenedor.
+     *
+     * Así no perdemos los resultados de búsqueda ni tenemos
+     * que volver a consultar el servidor.
+     */
+    if (!showingFavorites) {
+
+        savedMusicViews.clear();
+
+        savedMusicScrollY =
+                mainTabScroll.getScrollY();
+
+        for (int i = 0;
+                i < mainTabLayout.getChildCount();
+                i++) {
+
+            savedMusicViews.add(
+                    mainTabLayout.getChildAt(i)
+            );
+        }
+    }
+
+    showingFavorites = true;
+
+    switchContentTab(
+            mainTabLayout,
+            mainTabScroll,
+            true
+    );
+
+    if (searchCard != null) {
+        searchCard.setVisibility(
+                android.view.View.GONE
+        );
+    }
+
+    mainTabLayout.removeAllViews();
+
+    favoritePreparationStatusViews.clear();
+    favoriteSelectionChecks.clear();
+
+    LinearLayout header =
+            new LinearLayout(this);
+
+    header.setOrientation(
+            LinearLayout.HORIZONTAL
+    );
+
+    header.setGravity(
+            Gravity.CENTER_VERTICAL
+    );
+
+    TextView title =
+            new TextView(this);
+
+    title.setText(
+            "⭐ FAVORITOS"
+    );
+
+    title.setTextSize(22);
+
+    title.setTypeface(
+            title.getTypeface(),
+            android.graphics.Typeface.BOLD
+    );
+
+    title.setPadding(
+            dp(16),
+            dp(12),
+            dp(8),
+            dp(12)
+    );
+
+    header.addView(
+            title,
+            new LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+            )
+    );
+
+    Button playAll =
+            visualButton(
+                    "▶ REPRODUCIR TODO"
+            );
+
+    playAll.setOnClickListener(
+            v -> playFavorites()
+    );
+
+    header.addView(
+            playAll,
+            new LinearLayout.LayoutParams(
+                    0,
+                    dp(46),
+                    1f
+            )
+    );
+
+    mainTabLayout.addView(
+            header,
+            new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+    );
+
+    JSONArray favorites =
+            getFavoritesArray();
+
+    if (favorites.length() == 0) {
+
+        TextView empty =
+                new TextView(this);
+
+        empty.setText(
+                "Todavía no tienes favoritos.\n\n" +
+                "Puedes añadir canciones desde Música, " +
+                "Álbumes, Spotify y Offline."
+        );
+
+        empty.setTextSize(16);
+
+        empty.setGravity(
+                Gravity.CENTER
+        );
+
+        empty.setPadding(
+                dp(24),
+                dp(40),
+                dp(24),
+                dp(40)
+        );
+
+        mainTabLayout.addView(
+                empty,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+        );
+
+        return;
+    }
+
+    LinearLayout selectionButtons =
+            new LinearLayout(this);
+
+    selectionButtons.setOrientation(
+            LinearLayout.HORIZONTAL
+    );
+
+    Button selectAll =
+            visualButton(
+                    "☑ MARCAR TODAS"
+            );
+
+    Button deselectAll =
+            visualButton(
+                    "☐ DESMARCAR"
+            );
+
+    selectAll.setOnClickListener(v -> {
+
+        for (CheckBox check :
+                favoriteSelectionChecks) {
+
+            check.setChecked(true);
+        }
+    });
+
+    deselectAll.setOnClickListener(v -> {
+
+        for (CheckBox check :
+                favoriteSelectionChecks) {
+
+            check.setChecked(false);
+        }
+    });
+
+    selectionButtons.addView(
+            selectAll,
+            new LinearLayout.LayoutParams(
+                    0,
+                    dp(44),
+                    1f
+            )
+    );
+
+    LinearLayout.LayoutParams deselectParams =
+            new LinearLayout.LayoutParams(
+                    0,
+                    dp(44),
+                    1f
+            );
+
+    deselectParams.setMargins(
+            dp(6),
+            0,
+            0,
+            0
+    );
+
+    selectionButtons.addView(
+            deselectAll,
+            deselectParams
+    );
+
+    LinearLayout.LayoutParams selectionParams =
+            new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(44)
+            );
+
+    selectionParams.setMargins(
+            dp(8),
+            0,
+            dp(8),
+            dp(10)
+    );
+
+    mainTabLayout.addView(
+            selectionButtons,
+            selectionParams
+    );
+
+    for (int i = 0;
+            i < favorites.length();
+            i++) {
+
+        JSONObject item =
+                favorites.optJSONObject(i);
+
+        if (item == null) {
+            continue;
+        }
+
+        String type =
+                item.optString(
+                        "type",
+                        ""
+                );
+
+        if ("album".equals(type)) {
+
+            addFavoriteAlbumView(
+                    item
+            );
+
+        } else {
+
+            addFavoriteSongView(
+                    item
+            );
+        }
+    }
+}
+
+
+private void loadFavoriteCover(
+        JSONObject item,
+        ImageView imageView
+) {
+
+    if (item == null ||
+            imageView == null) {
+        return;
+    }
+
+    String local =
+            item.optString(
+                    "thumbnailLocal",
+                    ""
+            ).trim();
+
+    String remote =
+            item.optString(
+                    "thumbnail",
+                    ""
+            ).trim();
+
+    String videoId =
+            item.optString(
+                    "videoId",
+                    ""
+            ).trim();
+
+    String uriString =
+            item.optString(
+                    "uri",
+                    ""
+            ).trim();
+
+    executor.execute(() -> {
+
+        Bitmap bitmap = null;
+
+        /*
+         * 1. Intentar primero la portada local
+         * guardada específicamente para Favoritos.
+         */
+        try {
+
+            if (!local.isEmpty()) {
+
+                java.io.File file =
+                        new java.io.File(local);
+
+                if (file.exists()) {
+
+                    bitmap =
+                            BitmapFactory.decodeFile(
+                                    file.getAbsolutePath()
+                            );
+                }
+            }
+
+        } catch (Exception ignored) {
+        }
+
+        /*
+         * 2. Intentar la portada remota guardada.
+         */
+        if (bitmap == null &&
+                !remote.isEmpty()) {
+
+            HttpURLConnection conn = null;
+
+            try {
+
+                conn =
+                        (HttpURLConnection)
+                                new URL(remote)
+                                        .openConnection();
+
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(10000);
+                conn.setInstanceFollowRedirects(true);
+                conn.setRequestProperty(
+                        "User-Agent",
+                        "Mozilla/5.0"
+                );
+
+                int responseCode =
+                        conn.getResponseCode();
+
+                if (responseCode >= 200 &&
+                        responseCode < 300) {
+
+                    try (InputStream input =
+                                 conn.getInputStream()) {
+
+                        bitmap =
+                                BitmapFactory.decodeStream(
+                                        input
+                                );
+                    }
+                }
+
+            } catch (Exception ignored) {
+
+            } finally {
+
+                if (conn != null) {
+                    conn.disconnect();
+                }
+            }
+        }
+
+        /*
+         * 3. Si todavía no hay portada,
+         * utilizar directamente YouTube con el videoId.
+         */
+        if (bitmap == null &&
+                !videoId.isEmpty()) {
+
+            HttpURLConnection conn = null;
+
+            try {
+
+                String youtubeUrl =
+                        "https://i.ytimg.com/vi/"
+                                + videoId
+                                + "/hqdefault.jpg";
+
+                conn =
+                        (HttpURLConnection)
+                                new URL(youtubeUrl)
+                                        .openConnection();
+
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(10000);
+                conn.setInstanceFollowRedirects(true);
+                conn.setRequestProperty(
+                        "User-Agent",
+                        "Mozilla/5.0"
+                );
+
+                int responseCode =
+                        conn.getResponseCode();
+
+                if (responseCode >= 200 &&
+                        responseCode < 300) {
+
+                    try (InputStream input =
+                                 conn.getInputStream()) {
+
+                        bitmap =
+                                BitmapFactory.decodeStream(
+                                        input
+                                );
+                    }
+                }
+
+            } catch (Exception ignored) {
+
+            } finally {
+
+                if (conn != null) {
+                    conn.disconnect();
+                }
+            }
+        }
+
+        /*
+         * 4. Último recurso:
+         * recuperar la portada incrustada en el
+         * archivo offline.
+         */
+        if (bitmap == null &&
+                !uriString.isEmpty()) {
+
+            android.media.MediaMetadataRetriever retriever =
+                    new android.media.MediaMetadataRetriever();
+
+            try {
+
+                Uri offlineUri =
+                        Uri.parse(uriString);
+
+                retriever.setDataSource(
+                        MainActivity.this,
+                        offlineUri
+                );
+
+                byte[] artwork =
+                        retriever.getEmbeddedPicture();
+
+                if (artwork != null &&
+                        artwork.length > 0) {
+
+                    bitmap =
+                            BitmapFactory.decodeByteArray(
+                                    artwork,
+                                    0,
+                                    artwork.length
+                            );
+                }
+
+            } catch (Exception ignored) {
+
+            } finally {
+
+                try {
+                    retriever.release();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+
+        /*
+         * 5. Si hemos encontrado una portada,
+         * guardarla como thumbnailLocal para que
+         * el favorito no tenga que volver a descargarla.
+         */
+        if (bitmap != null) {
+
+            try {
+
+                java.io.File dir =
+                        new java.io.File(
+                                getFilesDir(),
+                                "favorite_covers"
+                        );
+
+                if (!dir.exists()) {
+                    dir.mkdirs();
+                }
+
+                String key =
+                        item.optString(
+                                "key",
+                                "favorite"
+                        );
+
+                String safeKey =
+                        key.replaceAll(
+                                "[^a-zA-Z0-9._-]",
+                                "_"
+                        );
+
+                java.io.File target =
+                        new java.io.File(
+                                dir,
+                                safeKey + ".jpg"
+                        );
+
+                try (
+                        java.io.FileOutputStream out =
+                                new java.io.FileOutputStream(
+                                        target
+                                )
+                ) {
+
+                    bitmap.compress(
+                            Bitmap.CompressFormat.JPEG,
+                            90,
+                            out
+                    );
+
+                    updateFavoriteThumbnailLocal(
+                            key,
+                            target.getAbsolutePath()
+                    );
+                }
+
+            } catch (Exception ignored) {
+            }
+        }
+
+        final Bitmap result = bitmap;
+
+        handler.post(() -> {
+
+            if (result != null) {
+
+                imageView.setImageBitmap(result);
+
+            } else {
+
+                imageView.setImageDrawable(null);
+            }
+        });
+    });
+}
+
+
+private void updateFavoriteThumbnailLocal(
+        String key,
+        String localPath
+) {
+
+    if (key == null ||
+            key.trim().isEmpty()) {
+        return;
+    }
+
+    JSONArray favorites =
+            getFavoritesArray();
+
+    for (int i = 0;
+            i < favorites.length();
+            i++) {
+
+        JSONObject item =
+                favorites.optJSONObject(i);
+
+        if (item == null) {
+            continue;
+        }
+
+        if (key.equals(
+                item.optString(
+                        "key",
+                        ""
+                )
+        )) {
+
+            try {
+
+                item.put(
+                        "thumbnailLocal",
+                        localPath
+                );
+
+            } catch (Exception ignored) {
+            }
+
+            break;
+        }
+    }
+
+    saveFavoritesArray(
+            favorites
+    );
+}
+
+
+private String getFavoriteAlbumThumbnail(
+        String albumId
+) {
+
+    if (albumId == null ||
+            albumId.trim().isEmpty()) {
+        return "";
+    }
+
+    return
+            "https://coverartarchive.org/release-group/"
+                    + albumId.trim()
+                    + "/front";
+}
+
+
+private void addFavoriteSongView(
+        JSONObject item
+) {
+
+    LinearLayout card =
+            new LinearLayout(this);
+
+    card.setOrientation(
+            LinearLayout.VERTICAL
+    );
+
+    card.setPadding(
+            dp(12),
+            dp(10),
+            dp(12),
+            dp(10)
+    );
+
+    LinearLayout top =
+            new LinearLayout(this);
+
+    top.setOrientation(
+            LinearLayout.HORIZONTAL
+    );
+
+    ImageView cover =
+            new ImageView(this);
+
+    cover.setScaleType(
+            ImageView.ScaleType.CENTER_CROP
+    );
+
+    top.addView(
+            cover,
+            new LinearLayout.LayoutParams(
+                    dp(72),
+                    dp(72)
+            )
+    );
+
+    LinearLayout text =
+            new LinearLayout(this);
+
+    text.setOrientation(
+            LinearLayout.VERTICAL
+    );
+
+    LinearLayout.LayoutParams textParams =
+            new LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+            );
+
+    textParams.setMargins(
+            dp(12),
+            0,
+            0,
+            0
+    );
+
+    TextView title =
+            new TextView(this);
+
+    title.setText(
+            item.optString(
+                    "title",
+                    "Canción"
+            )
+    );
+
+    title.setTextSize(17);
+
+    title.setTypeface(
+            title.getTypeface(),
+            android.graphics.Typeface.BOLD
+    );
+
+    TextView info =
+            new TextView(this);
+
+    String artist =
+            item.optString(
+                    "artist",
+                    ""
+            );
+
+    String album =
+            item.optString(
+                    "album",
+                    ""
+            );
+
+    String source =
+            item.optString(
+                    "source",
+                    ""
+            );
+
+    StringBuilder infoText =
+            new StringBuilder();
+
+    if (!artist.trim().isEmpty()) {
+        infoText.append(artist.trim());
+    }
+
+    if (!album.trim().isEmpty()) {
+
+        if (infoText.length() > 0) {
+            infoText.append(" · ");
+        }
+
+        infoText.append(album.trim());
+    }
+
+    if (!source.trim().isEmpty()) {
+
+        if (infoText.length() > 0) {
+            infoText.append(" · ");
+        }
+
+        infoText.append(source);
+    }
+
+    info.setText(
+            infoText.toString()
+    );
+
+    info.setTextSize(13);
+
+    TextView obtainedStatus =
+            createObtainedStatusView();
+
+    String favoriteKey =
+            item.optString(
+                    "key",
+                    ""
+            );
+
+    obtainedStatus.setTag(
+            favoriteKey
+    );
+
+    obtainedStatus.setVisibility(
+            android.view.View.GONE
+    );
+
+    favoritePreparationStatusViews.add(
+            obtainedStatus
+    );
+
+    text.addView(title);
+    text.addView(info);
+    text.addView(obtainedStatus);
+
+    top.addView(
+            text,
+            textParams
+    );
+
+    CheckBox select =
+            new CheckBox(this);
+
+    select.setChecked(true);
+    select.setTag(item);
+
+    favoriteSelectionChecks.add(
+            select
+    );
+
+    top.addView(
+            select,
+            new LinearLayout.LayoutParams(
+                    dp(48),
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+    );
+
+    card.addView(top);
+
+    loadFavoriteCover(
+            item,
+            cover
+    );
+
+    LinearLayout buttons =
+            new LinearLayout(this);
+
+    buttons.setOrientation(
+            LinearLayout.HORIZONTAL
+    );
+
+    Button play =
+            visualButton(
+                    "▶"
+            );
+
+    play.setOnClickListener(
+            v -> playSingleFavorite(item)
+    );
+
+    Button remove =
+            visualButton(
+                    "★"
+            );
+
+    remove.setOnClickListener(
+            v -> {
+
+                removeFavoriteItem(
+                        item.optString(
+                                "key",
+                                ""
+                        )
+                );
+
+                showFavorites();
+            }
+    );
+
+    buttons.addView(
+            play,
+            new LinearLayout.LayoutParams(
+                    0,
+                    dp(44),
+                    1f
+            )
+    );
+
+    LinearLayout.LayoutParams removeParams =
+            new LinearLayout.LayoutParams(
+                    0,
+                    dp(44),
+                    1f
+            );
+
+    removeParams.setMargins(
+            dp(6),
+            0,
+            0,
+            0
+    );
+
+    buttons.addView(
+            remove,
+            removeParams
+    );
+
+    LinearLayout.LayoutParams buttonParams =
+            new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(44)
+            );
+
+    buttonParams.setMargins(
+            0,
+            dp(8),
+            0,
+            0
+    );
+
+    card.addView(
+            buttons,
+            buttonParams
+    );
+
+    LinearLayout.LayoutParams cardParams =
+            new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+            );
+
+    cardParams.setMargins(
+            dp(10),
+            dp(5),
+            dp(10),
+            dp(5)
+    );
+
+    mainTabLayout.addView(
+            card,
+            cardParams
+    );
+}
+
+private void addFavoriteAlbumView(
+        JSONObject item
+) {
+
+    LinearLayout card =
+            new LinearLayout(this);
+
+    card.setOrientation(
+            LinearLayout.VERTICAL
+    );
+
+    card.setPadding(
+            dp(12),
+            dp(10),
+            dp(12),
+            dp(10)
+    );
+
+    LinearLayout top =
+            new LinearLayout(this);
+
+    top.setOrientation(
+            LinearLayout.HORIZONTAL
+    );
+
+    ImageView cover =
+            new ImageView(this);
+
+    cover.setScaleType(
+            ImageView.ScaleType.CENTER_CROP
+    );
+
+    top.addView(
+            cover,
+            new LinearLayout.LayoutParams(
+                    dp(82),
+                    dp(82)
+            )
+    );
+
+    LinearLayout text =
+            new LinearLayout(this);
+
+    text.setOrientation(
+            LinearLayout.VERTICAL
+    );
+
+    LinearLayout.LayoutParams textParams =
+            new LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+            );
+
+    textParams.setMargins(
+            dp(12),
+            0,
+            0,
+            0
+    );
+
+    TextView title =
+            new TextView(this);
+
+    title.setText(
+            item.optString(
+                    "title",
+                    "Álbum"
+            )
+    );
+
+    title.setTextSize(17);
+
+    title.setTypeface(
+            title.getTypeface(),
+            android.graphics.Typeface.BOLD
+    );
+
+    TextView artist =
+            new TextView(this);
+
+    artist.setText(
+            item.optString(
+                    "artist",
+                    ""
+            )
+    );
+
+    artist.setTextSize(13);
+
+    text.addView(title);
+    text.addView(artist);
+
+    top.addView(
+            text,
+            textParams
+    );
+
+    CheckBox select =
+            new CheckBox(this);
+
+    select.setChecked(true);
+    select.setTag(item);
+
+    favoriteSelectionChecks.add(
+            select
+    );
+
+    top.addView(
+            select,
+            new LinearLayout.LayoutParams(
+                    dp(48),
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+    );
+
+    card.addView(top);
+
+    loadFavoriteCover(
+            item,
+            cover
+    );
+
+    LinearLayout buttons =
+            new LinearLayout(this);
+
+    buttons.setOrientation(
+            LinearLayout.HORIZONTAL
+    );
+
+    Button play =
+            visualButton(
+                    "▶ ÁLBUM"
+            );
+
+    play.setOnClickListener(
+            v -> playSingleFavorite(item)
+    );
+
+    Button remove =
+            visualButton(
+                    "★"
+            );
+
+    remove.setOnClickListener(
+            v -> {
+
+                removeFavoriteItem(
+                        item.optString(
+                                "key",
+                                ""
+                        )
+                );
+
+                showFavorites();
+            }
+    );
+
+    buttons.addView(
+            play,
+            new LinearLayout.LayoutParams(
+                    0,
+                    dp(44),
+                    1f
+            )
+    );
+
+    LinearLayout.LayoutParams removeParams =
+            new LinearLayout.LayoutParams(
+                    0,
+                    dp(44),
+                    1f
+            );
+
+    removeParams.setMargins(
+            dp(6),
+            0,
+            0,
+            0
+    );
+
+    buttons.addView(
+            remove,
+            removeParams
+    );
+
+    LinearLayout.LayoutParams buttonParams =
+            new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(44)
+            );
+
+    buttonParams.setMargins(
+            0,
+            dp(8),
+            0,
+            0
+    );
+
+    card.addView(
+            buttons,
+            buttonParams
+    );
+
+    LinearLayout.LayoutParams cardParams =
+            new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+            );
+
+    cardParams.setMargins(
+            dp(10),
+            dp(5),
+            dp(10),
+            dp(5)
+    );
+
+    mainTabLayout.addView(
+            card,
+            cardParams
+    );
+}
+
+private void removeFavoriteItem(
+        String key
+) {
+
+    if (key == null ||
+            key.trim().isEmpty()) {
+        return;
+    }
+
+    JSONArray old =
+            getFavoritesArray();
+
+    JSONArray result =
+            new JSONArray();
+
+    for (int i = 0;
+            i < old.length();
+            i++) {
+
+        JSONObject item =
+                old.optJSONObject(i);
+
+        if (item == null) {
+            continue;
+        }
+
+        if (key.equals(
+                item.optString(
+                        "key",
+                        ""
+                )
+        )) {
+            continue;
+        }
+
+        result.put(item);
+    }
+
+    saveFavoritesArray(result);
+}
+
+/*
+ * ============================================================
+ * FAVORITOS - REPRODUCCIÓN
+ * ============================================================
+ */
+
+private void playSingleFavorite(
+        JSONObject favorite
+) {
+
+    if (favorite == null) {
+        return;
+    }
+
+    JSONArray one =
+            new JSONArray();
+
+    one.put(favorite);
+
+    prepareFavoritesPlayback(
+            one
+    );
+}
+
+private void playFavorites() {
+
+    JSONArray favorites =
+            getFavoritesArray();
+
+    if (favorites.length() == 0) {
+
+        Toast.makeText(
+                this,
+                "No hay favoritos",
+                Toast.LENGTH_SHORT
+        ).show();
+
+        return;
+    }
+
+    JSONArray selectedFavorites =
+            new JSONArray();
+
+    for (CheckBox check :
+            favoriteSelectionChecks) {
+
+        if (!check.isChecked()) {
+            continue;
+        }
+
+        Object tag =
+                check.getTag();
+
+        if (tag instanceof JSONObject) {
+            selectedFavorites.put(
+                    (JSONObject) tag
+            );
+        }
+    }
+
+    if (selectedFavorites.length() == 0) {
+
+        Toast.makeText(
+                this,
+                "⚠ Selecciona al menos un favorito",
+                Toast.LENGTH_SHORT
+        ).show();
+
+        return;
+    }
+
+    Toast.makeText(
+            this,
+            "⏳ Preparando " +
+                    selectedFavorites.length() +
+                    " favoritos...",
+            Toast.LENGTH_SHORT
+    ).show();
+
+    /*
+     * El controlador puede tardar unos instantes en estar
+     * conectado al arrancar la aplicación. Esperamos sin
+     * modificar la lógica de la cola.
+     */
+    if (mediaController == null) {
+
+        Toast.makeText(
+                this,
+                "Conectando reproductor...",
+                Toast.LENGTH_SHORT
+        ).show();
+
+        handler.postDelayed(
+                () -> {
+
+                    if (mediaController != null) {
+
+                        prepareFavoritesPlayback(
+                                selectedFavorites
+                        );
+
+                    } else {
+
+                        Toast.makeText(
+                                this,
+                                "Reproductor no conectado",
+                                Toast.LENGTH_SHORT
+                        ).show();
+                    }
+
+                },
+                500
+        );
+
+        return;
+    }
+
+    prepareFavoritesPlayback(
+            selectedFavorites
+    );
+}
+
+private void markFavoriteObtained(
+        String favoriteKey
+) {
+
+    if (favoriteKey == null ||
+            favoriteKey.trim().isEmpty()) {
+
+        return;
+    }
+
+    handler.post(() -> {
+
+        for (TextView status :
+                favoritePreparationStatusViews) {
+
+            if (status == null) {
+                continue;
+            }
+
+            Object tag =
+                    status.getTag();
+
+            if (favoriteKey.equals(
+                    tag == null
+                            ? ""
+                            : tag.toString()
+            )) {
+
+                status.setText(
+                        "✓ OBTENIDA"
+                );
+
+                status.setVisibility(
+                        android.view.View.VISIBLE
+                );
+
+                break;
+            }
+        }
+    });
+}
+
+
+private ApiClient.Album getFavoriteAlbumWithRetry(
+        String albumId
+) throws Exception {
+
+    final long retryDeadline =
+            System.currentTimeMillis() + 60000L;
+
+    Exception lastError = null;
+
+    while (System.currentTimeMillis() < retryDeadline) {
+
+        try {
+
+            ApiClient.Album album =
+                    api().getAlbum(
+                            albumId
+                    );
+
+            if (album == null) {
+                throw new Exception(
+                        "No se pudo obtener el álbum"
+                );
+            }
+
+            return album;
+
+        } catch (Exception error) {
+
+            lastError = error;
+
+            try {
+                Thread.sleep(3000L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw interrupted;
+            }
+        }
+    }
+
+    if (lastError != null) {
+        throw lastError;
+    }
+
+    throw new Exception(
+            "Tiempo agotado esperando conexión"
+    );
+}
+
+private String getFavoritePreviewUrlWithRetry(
+        String videoId
+) throws Exception {
+
+    final long retryDeadline =
+            System.currentTimeMillis() + 60000L;
+
+    Exception lastError = null;
+
+    while (System.currentTimeMillis() < retryDeadline) {
+
+        try {
+
+            String url =
+                    api().getPreviewUrl(
+                            videoId
+                    );
+
+            if (url != null &&
+                    !url.trim().isEmpty()) {
+
+                return url;
+            }
+
+            throw new Exception(
+                    "No se obtuvo URL de reproducción"
+            );
+
+        } catch (Exception error) {
+
+            lastError = error;
+
+            try {
+                Thread.sleep(3000L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw interrupted;
+            }
+        }
+    }
+
+    if (lastError != null) {
+        throw lastError;
+    }
+
+    throw new Exception(
+            "Tiempo agotado esperando conexión"
+    );
+}
+
+
+private void prepareFavoritesPlayback(
+        JSONArray favorites
+) {
+
+    if (favorites == null ||
+            favorites.length() == 0) {
+
+        Toast.makeText(
+                this,
+                "No hay favoritos",
+                Toast.LENGTH_SHORT
+        ).show();
+
+        return;
+    }
+
+    /*
+     * Una nueva reproducción de Favoritos
+     * invalida cualquier resolución individual
+     * anterior que todavía estuviera pendiente.
+     */
+    final long playbackGeneration =
+            beginIndividualPlayback();
+
+    final long queueGeneration =
+            beginQueuePreparation(
+                    favorites.length()
+            );
+
+    executor.execute(() -> {
+
+        boolean firstItem = true;
+        int preparedCount = 0;
+
+        try {
+
+            for (int i = 0;
+                    i < favorites.length();
+                    i++) {
+
+                if (!isCurrentIndividualPlayback(
+                        playbackGeneration
+                )) {
+                    return;
+                }
+
+                JSONObject favorite =
+                        favorites.optJSONObject(i);
+
+                if (favorite == null) {
+                    continue;
+                }
+
+                String type =
+                        favorite.optString(
+                                "type",
+                                ""
+                        );
+
+                String favoriteKey =
+                        favorite.optString(
+                                "key",
+                                ""
+                        ).trim();
+
+                /*
+                 * FAVORITO DE ÁLBUM
+                 */
+                if ("album".equals(type)) {
+
+                    String albumId =
+                            favorite.optString(
+                                    "albumId",
+                                    ""
+                            ).trim();
+
+                    if (albumId.isEmpty()) {
+                        continue;
+                    }
+
+                    ApiClient.Album album =
+                            getFavoriteAlbumWithRetry(
+                                    albumId
+                            );
+
+                    if (album == null ||
+                            album.tracks == null) {
+                        continue;
+                    }
+
+                    for (ApiClient.Song track :
+                            album.tracks) {
+
+                        if (!isCurrentIndividualPlayback(
+                                playbackGeneration
+                        )) {
+                            return;
+                        }
+
+                        if (track == null) {
+                            continue;
+                        }
+
+                        try {
+
+                            AlbumResolvedTrack resolvedResult =
+                                    resolveAlbumTrackWithRetry(
+                                            track.artist,
+                                            track.title
+                                    );
+
+                            ApiClient.Song resolved =
+                                    resolvedResult.resolved;
+
+                            String url =
+                                    resolvedResult.url;
+
+                            MediaItem readyItem =
+                                    buildFavoriteMediaItem(
+                                            url,
+                                            track.title,
+                                            track.artist,
+                                            track.album,
+                                            track.thumbnail,
+                                            resolved.id
+                                    );
+
+                            preparedCount++;
+
+                            final MediaItem item =
+                                    readyItem;
+
+                            final boolean replaceQueue =
+                                    firstItem;
+
+                            handler.post(() -> {
+
+                                if (!isCurrentIndividualPlayback(
+                                        playbackGeneration
+                                )) {
+                                    return;
+                                }
+
+                                if (replaceQueue) {
+
+                                    sendQueueToPlayer(
+                                            java.util.Collections.singletonList(
+                                                    item
+                                            )
+                                    );
+
+                                } else {
+
+                                    addItemsToPlayerQueue(
+                                            java.util.Collections.singletonList(
+                                                    item
+                                            )
+                                    );
+                                }
+                            });
+
+                            firstItem = false;
+
+                        } catch (Exception ignored) {
+                        }
+                    }
+
+                    continue;
+                }
+
+                /*
+                 * DATOS DEL FAVORITO DE CANCIÓN
+                 */
+                String uri =
+                        favorite.optString(
+                                "uri",
+                                ""
+                        ).trim();
+
+                String videoId =
+                        favorite.optString(
+                                "videoId",
+                                ""
+                        ).trim();
+
+                String spotifyId =
+                        favorite.optString(
+                                "spotifyId",
+                                ""
+                        ).trim();
+
+                String title =
+                        favorite.optString(
+                                "title",
+                                "Canción"
+                        );
+
+                String artist =
+                        favorite.optString(
+                                "artist",
+                                ""
+                        );
+
+                String album =
+                        favorite.optString(
+                                "album",
+                                ""
+                        );
+
+                String thumbnail =
+                        favorite.optString(
+                                "thumbnail",
+                                ""
+                        );
+
+                MediaItem readyItem = null;
+
+                /*
+                 * OFFLINE
+                 */
+                if (!uri.isEmpty()) {
+
+                    try {
+
+                        Uri offlineUri =
+                                Uri.parse(uri);
+
+                        if (offlineUri.getScheme() != null &&
+                                !offlineUri.getScheme().trim().isEmpty()) {
+
+                            readyItem =
+                                    buildFavoriteMediaItem(
+                                            uri,
+                                            title,
+                                            artist,
+                                            album,
+                                            thumbnail,
+                                            videoId
+                                    );
+                        }
+
+                    } catch (Exception ignored) {
+                        readyItem = null;
+                    }
+
+                /*
+                 * SPOTIFY
+                 */
+                } else if (!spotifyId.isEmpty()) {
+
+                    SpotifyResolvedTrack resolvedResult =
+                            resolveSpotifyTrackWithRetry(
+                                    artist,
+                                    title
+                            );
+
+                    ApiClient.Song resolved =
+                            resolvedResult.resolved;
+
+                    videoId =
+                            resolved.id;
+
+                    String url =
+                            resolvedResult.url;
+
+                    readyItem =
+                            buildFavoriteMediaItem(
+                                    url,
+                                    title,
+                                    artist,
+                                    album,
+                                    thumbnail,
+                                    videoId
+                            );
+
+                /*
+                 * MÚSICA / CANCIÓN DE ÁLBUM
+                 */
+                } else if (!videoId.isEmpty()) {
+
+                    String url =
+                            getFavoritePreviewUrlWithRetry(
+                                    videoId
+                            );
+
+                    readyItem =
+                            buildFavoriteMediaItem(
+                                    url,
+                                    title,
+                                    artist,
+                                    album,
+                                    thumbnail,
+                                    videoId
+                            );
+                }
+
+                if (readyItem == null) {
+                    continue;
+                }
+
+                preparedCount++;
+
+                final int currentPrepared =
+                        preparedCount;
+
+                final MediaItem item =
+                        readyItem;
+
+                final String obtainedKey =
+                        favoriteKey;
+
+                final boolean replaceQueue =
+                        firstItem;
+
+                handler.post(() -> {
+
+                    if (!isCurrentIndividualPlayback(
+                            playbackGeneration
+                    )) {
+                        return;
+                    }
+
+                    if (replaceQueue) {
+
+                        sendQueueToPlayer(
+                                java.util.Collections.singletonList(
+                                        item
+                                )
+                        );
+
+                    } else {
+
+                        addItemsToPlayerQueue(
+                                java.util.Collections.singletonList(
+                                        item
+                                )
+                        );
+                    }
+
+                    if (!obtainedKey.isEmpty()) {
+
+                        markFavoriteObtained(
+                                obtainedKey
+                        );
+                    }
+
+                    updateQueuePreparationProgress(
+                            queueGeneration,
+                            currentPrepared,
+                            favorites.length()
+                    );
+                });
+
+                firstItem = false;
+            }
+
+            final int totalPrepared =
+                    preparedCount;
+
+            handler.post(() -> {
+
+                if (!isCurrentIndividualPlayback(
+                        playbackGeneration
+                )) {
+                    return;
+                }
+
+                if (totalPrepared == 0) {
+
+                    Toast.makeText(
+                            this,
+                            "No se pudo preparar ningún favorito",
+                            Toast.LENGTH_SHORT
+                    ).show();
+                }
+            });
+
+        } catch (Exception e) {
+
+            handler.post(() -> {
+
+                if (!isCurrentIndividualPlayback(
+                        playbackGeneration
+                )) {
+                    return;
+                }
+
+                Toast.makeText(
+                        this,
+                        "Error preparando favoritos",
+                        Toast.LENGTH_SHORT
+                ).show();
+            });
+        }
+    });
+}
+
+private MediaItem buildFavoriteMediaItem(
+        String url,
+        String title,
+        String artist,
+        String album,
+        String thumbnail,
+        String mediaId
+) {
+
+    MediaMetadata.Builder metadata =
+            new MediaMetadata.Builder()
+                    .setTitle(
+                            title == null
+                                    ? ""
+                                    : title
+                    )
+                    .setArtist(
+                            artist == null
+                                    ? ""
+                                    : artist
+                    )
+                    .setAlbumTitle(
+                            album == null
+                                    ? ""
+                                    : album
+                    );
+
+    if (thumbnail != null &&
+            !thumbnail.trim().isEmpty()) {
+
+        try {
+
+            metadata.setArtworkUri(
+                    Uri.parse(
+                            thumbnail
+                    )
+            );
+
+        } catch (Exception ignored) {
+        }
+    }
+
+    return new MediaItem.Builder()
+            .setMediaId(
+                    mediaId == null
+                            ? ""
+                            : mediaId
+            )
+            .setUri(url)
+            .setMediaMetadata(
+                    metadata.build()
+            )
+            .build();
+}
+
+
+
+private JSONArray getFavoritesArray() {
+
+    String raw =
+            getSharedPreferences(
+                    FAVORITES_PREFS,
+                    MODE_PRIVATE
+            ).getString(
+                    FAVORITES_KEY,
+                    "[]"
+            );
+
+    try {
+        return new JSONArray(raw);
+    } catch (Exception e) {
+        return new JSONArray();
+    }
+}
+
+private void saveFavoritesArray(
+        JSONArray array
+) {
+
+    getSharedPreferences(
+            FAVORITES_PREFS,
+            MODE_PRIVATE
+    ).edit()
+            .putString(
+                    FAVORITES_KEY,
+                    array.toString()
+            )
+            .commit();
+}
+
+private String favoriteSongKey(
+        String videoId,
+        String spotifyId,
+        String uri
+) {
+
+    if (videoId != null &&
+            !videoId.trim().isEmpty()) {
+
+        return "song:" +
+                videoId.trim();
+    }
+
+    if (spotifyId != null &&
+            !spotifyId.trim().isEmpty()) {
+
+        return "spotify:" +
+                spotifyId.trim();
+    }
+
+    if (uri != null &&
+            !uri.trim().isEmpty()) {
+
+        return "offline:" +
+                uri.trim();
+    }
+
+    return "";
+}
+
+private boolean isFavoriteKey(
+        String key
+) {
+
+    if (key == null ||
+            key.trim().isEmpty()) {
+
+        return false;
+    }
+
+    JSONArray array =
+            getFavoritesArray();
+
+    for (int i = 0;
+            i < array.length();
+            i++) {
+
+        JSONObject item =
+                array.optJSONObject(i);
+
+        if (item == null) {
+            continue;
+        }
+
+        if (key.equals(
+                item.optString(
+                        "key",
+                        ""
+                )
+        )) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+private void toggleFavoriteSong(
+        String key,
+        String source,
+        String videoId,
+        String spotifyId,
+        String title,
+        String artist,
+        String album,
+        String thumbnail,
+        long duration,
+        String uri
+) {
+
+    if (key == null ||
+            key.trim().isEmpty()) {
+
+        return;
+    }
+
+    JSONArray old =
+            getFavoritesArray();
+
+    JSONArray result =
+            new JSONArray();
+
+    boolean removed = false;
+
+    for (int i = 0;
+            i < old.length();
+            i++) {
+
+        JSONObject item =
+                old.optJSONObject(i);
+
+        if (item == null) {
+            continue;
+        }
+
+        if (key.equals(
+                item.optString(
+                        "key",
+                        ""
+                )
+        )) {
+
+            removed = true;
+            continue;
+        }
+
+        result.put(item);
+    }
+
+    if (!removed) {
+
+        JSONObject item =
+                new JSONObject();
+
+        try {
+
+            item.put("type", "song");
+            item.put("key", key);
+            item.put("source", source);
+            item.put(
+                    "videoId",
+                    videoId == null ? "" : videoId
+            );
+            item.put(
+                    "spotifyId",
+                    spotifyId == null ? "" : spotifyId
+            );
+            item.put(
+                    "title",
+                    title == null ? "" : title
+            );
+            item.put(
+                    "artist",
+                    artist == null ? "" : artist
+            );
+            item.put(
+                    "album",
+                    album == null ? "" : album
+            );
+            item.put(
+                    "thumbnail",
+                    thumbnail == null ? "" : thumbnail
+            );
+
+            item.put(
+                    "thumbnailLocal",
+                    ""
+            );
+            item.put("duration", duration);
+            item.put(
+                    "uri",
+                    uri == null ? "" : uri
+            );
+            item.put(
+                    "dateAdded",
+                    System.currentTimeMillis()
+            );
+
+            result.put(item);
+
+        } catch (Exception ignored) {
+        }
+    }
+
+    saveFavoritesArray(result);
+}
+
+private void toggleFavoriteAlbum(
+        ApiClient.Album album
+) {
+
+    if (album == null ||
+            album.id == null ||
+            album.id.trim().isEmpty()) {
+
+        return;
+    }
+
+    String key =
+            "album:" +
+            album.id.trim();
+
+    JSONArray old =
+            getFavoritesArray();
+
+    JSONArray result =
+            new JSONArray();
+
+    boolean removed = false;
+
+    for (int i = 0;
+            i < old.length();
+            i++) {
+
+        JSONObject item =
+                old.optJSONObject(i);
+
+        if (item == null) {
+            continue;
+        }
+
+        if (key.equals(
+                item.optString(
+                        "key",
+                        ""
+                )
+        )) {
+
+            removed = true;
+            continue;
+        }
+
+        result.put(item);
+    }
+
+    if (!removed) {
+
+        JSONObject item =
+                new JSONObject();
+
+        try {
+
+            item.put("type", "album");
+            item.put("key", key);
+            item.put("albumId", album.id);
+            item.put(
+                    "title",
+                    album.title == null
+                            ? ""
+                            : album.title
+            );
+            item.put(
+                    "artist",
+                    album.artist == null
+                            ? ""
+                            : album.artist
+            );
+
+            String thumbnail =
+                    getFavoriteAlbumThumbnail(
+                            album.id
+                    );
+
+            item.put(
+                    "thumbnail",
+                    thumbnail
+            );
+
+            item.put(
+                    "thumbnailLocal",
+                    ""
+            );
+            item.put(
+                    "dateAdded",
+                    System.currentTimeMillis()
+            );
+
+            result.put(item);
+
+        } catch (Exception ignored) {
+        }
+    }
+
+    saveFavoritesArray(result);
+}
+
+private Button createFavoriteButton(
+        ApiClient.Song song,
+        String source
+) {
+
+    String videoId =
+            song.videoId != null &&
+            !song.videoId.trim().isEmpty()
+                    ? song.videoId.trim()
+                    : song.id;
+
+    String key =
+            favoriteSongKey(
+                    videoId,
+                    "",
+                    ""
+            );
+
+    Button button =
+            visualButton(
+                    isFavoriteKey(key)
+                            ? "⭐"
+                            : "☆"
+            );
+
+    button.setOnClickListener(
+            v -> {
+
+                /*
+                 * Si la canción ya tiene videoId/id,
+                 * conservamos exactamente el comportamiento
+                 * anterior.
+                 */
+                if (videoId != null &&
+                        !videoId.trim().isEmpty()) {
+
+                    toggleFavoriteSong(
+                            key,
+                            source,
+                            videoId,
+                            "",
+                            song.title,
+                            song.artist,
+                            song.album,
+                            song.thumbnail,
+                            song.duration * 1000L,
+                            ""
+                    );
+
+                    button.setText(
+                            isFavoriteKey(key)
+                                    ? "⭐"
+                                    : "☆"
+                    );
+
+                    return;
+                }
+
+                /*
+                 * Las canciones de álbum pueden mostrarse antes
+                 * de tener resuelto el videoId.
+                 *
+                 * Lo resolvemos al pulsar favorito, reutilizando
+                 * exactamente el mismo resolver que ya utiliza
+                 * la reproducción de álbumes.
+                 */
+                /*
+                 * Toggle visual inmediato.
+                 *
+                 * Si estaba marcado, lo quitamos visualmente.
+                 * Si estaba desmarcado, lo marcamos visualmente.
+                 *
+                 * La operación real se completa después de resolver
+                 * el videoId en segundo plano.
+                 */
+                final boolean wasFavorite =
+                        "⭐".contentEquals(button.getText());
+
+                final boolean targetFavorite =
+                        !wasFavorite;
+
+                button.setText(
+                        targetFavorite
+                                ? "⭐"
+                                : "☆"
+                );
+
+                button.setEnabled(false);
+
+                executor.execute(() -> {
+
+                    try {
+
+                        AlbumResolvedTrack resolvedResult =
+                                resolveAlbumTrackWithRetry(
+                                        song.artist,
+                                        song.title
+                                );
+
+                        ApiClient.Song resolved =
+                                resolvedResult.resolved;
+
+                        if (resolved == null ||
+                                resolved.id == null ||
+                                resolved.id.trim().isEmpty()) {
+
+                            throw new Exception(
+                                    "No se pudo obtener videoId"
+                            );
+                        }
+
+                        String resolvedVideoId =
+                                resolved.id.trim();
+
+                        String resolvedKey =
+                                favoriteSongKey(
+                                        resolvedVideoId,
+                                        "",
+                                        ""
+                                );
+
+                        handler.post(() -> {
+
+                            /*
+                             * Completamos el mismo estado que el
+                             * usuario solicitó visualmente.
+                             *
+                             * Añadir:
+                             *   solo hacemos toggle si aún no existe.
+                             *
+                             * Eliminar:
+                             *   solo hacemos toggle si existe.
+                             */
+                            boolean currentlyFavorite =
+                                    isFavoriteKey(resolvedKey);
+
+                            if (targetFavorite &&
+                                    !currentlyFavorite) {
+
+                                toggleFavoriteSong(
+                                        resolvedKey,
+                                        source,
+                                        resolvedVideoId,
+                                        "",
+                                        song.title,
+                                        song.artist,
+                                        song.album,
+                                        song.thumbnail,
+                                        song.duration * 1000L,
+                                        ""
+                                );
+
+                            } else if (!targetFavorite &&
+                                    currentlyFavorite) {
+
+                                toggleFavoriteSong(
+                                        resolvedKey,
+                                        source,
+                                        resolvedVideoId,
+                                        "",
+                                        song.title,
+                                        song.artist,
+                                        song.album,
+                                        song.thumbnail,
+                                        song.duration * 1000L,
+                                        ""
+                                );
+                            }
+
+                            button.setText(
+                                    targetFavorite
+                                            ? "⭐"
+                                            : "☆"
+                            );
+
+                            button.setEnabled(true);
+                        });
+
+                    } catch (Exception error) {
+
+                        handler.post(() -> {
+
+                            /*
+                             * Si la resolución falla, recuperamos
+                             * exactamente el estado anterior.
+                             */
+                            button.setText(
+                                    wasFavorite
+                                            ? "⭐"
+                                            : "☆"
+                            );
+
+                            button.setEnabled(true);
+
+                            Toast.makeText(
+                                    MainActivity.this,
+                                    "No se pudo guardar el favorito",
+                                    Toast.LENGTH_SHORT
+                            ).show();
+                        });
+                    }
+                });
+            }
+    );
+
+    return button;
+}
+
+private Button createFavoriteButton(
+        ApiClient.SpotifyTrack track,
+        String source
+) {
+
+    String spotifyId =
+            track.id == null
+                    ? ""
+                    : track.id.trim();
+
+    String key =
+            favoriteSongKey(
+                    "",
+                    spotifyId,
+                    ""
+            );
+
+    Button button =
+            spotifyModernButton(
+                    isFavoriteKey(key)
+                            ? "⭐"
+                            : "☆",
+                    false
+            );
+
+    button.setOnClickListener(
+            v -> {
+
+                /*
+                 * Si Spotify ya proporciona ID, conservamos
+                 * el comportamiento actual.
+                 */
+                if (!spotifyId.isEmpty()) {
+
+                    toggleFavoriteSong(
+                            key,
+                            source,
+                            "",
+                            spotifyId,
+                            track.title,
+                            track.artist,
+                            track.album,
+                            track.thumbnail,
+                            track.duration * 1000L,
+                            ""
+                    );
+
+                    button.setText(
+                            isFavoriteKey(key)
+                                    ? "⭐"
+                                    : "☆"
+                    );
+
+                    return;
+                }
+
+                /*
+                 * Algunas pistas Spotify llegan a la interfaz
+                 * sin spotifyId. En ese caso resolvemos artista
+                 * + título mediante el mismo resolver que ya usa
+                 * la reproducción Spotify.
+                 */
+                /*
+                 * Toggle visual inmediato.
+                 *
+                 * Si estaba marcado, lo quitamos visualmente.
+                 * Si estaba desmarcado, lo marcamos visualmente.
+                 *
+                 * La operación real se completa después de resolver
+                 * el videoId en segundo plano.
+                 */
+                final boolean wasFavorite =
+                        "⭐".contentEquals(button.getText());
+
+                final boolean targetFavorite =
+                        !wasFavorite;
+
+                button.setText(
+                        targetFavorite
+                                ? "⭐"
+                                : "☆"
+                );
+
+                button.setEnabled(false);
+
+                executor.execute(() -> {
+
+                    try {
+
+                        SpotifyResolvedTrack resolvedResult =
+                                resolveSpotifyTrackWithRetry(
+                                        track.artist,
+                                        track.title
+                                );
+
+                        ApiClient.Song resolved =
+                                resolvedResult.resolved;
+
+                        if (resolved == null ||
+                                resolved.id == null ||
+                                resolved.id.trim().isEmpty()) {
+
+                            throw new Exception(
+                                    "No se pudo obtener videoId"
+                            );
+                        }
+
+                        String resolvedVideoId =
+                                resolved.id.trim();
+
+                        String resolvedKey =
+                                favoriteSongKey(
+                                        resolvedVideoId,
+                                        "",
+                                        ""
+                                );
+
+                        handler.post(() -> {
+
+                            /*
+                             * Completamos el mismo estado que el
+                             * usuario solicitó visualmente.
+                             *
+                             * Añadir:
+                             *   solo hacemos toggle si aún no existe.
+                             *
+                             * Eliminar:
+                             *   solo hacemos toggle si existe.
+                             */
+                            boolean currentlyFavorite =
+                                    isFavoriteKey(resolvedKey);
+
+                            if (targetFavorite &&
+                                    !currentlyFavorite) {
+
+                                toggleFavoriteSong(
+                                        resolvedKey,
+                                        source,
+                                        resolvedVideoId,
+                                        "",
+                                        track.title,
+                                        track.artist,
+                                        track.album,
+                                        track.thumbnail,
+                                        track.duration * 1000L,
+                                        ""
+                                );
+
+                            } else if (!targetFavorite &&
+                                    currentlyFavorite) {
+
+                                toggleFavoriteSong(
+                                        resolvedKey,
+                                        source,
+                                        resolvedVideoId,
+                                        "",
+                                        track.title,
+                                        track.artist,
+                                        track.album,
+                                        track.thumbnail,
+                                        track.duration * 1000L,
+                                        ""
+                                );
+                            }
+
+                            button.setText(
+                                    targetFavorite
+                                            ? "⭐"
+                                            : "☆"
+                            );
+
+                            button.setEnabled(true);
+                        });
+
+                    } catch (Exception error) {
+
+                        handler.post(() -> {
+
+                            /*
+                             * Si la resolución falla, recuperamos
+                             * exactamente el estado anterior.
+                             */
+                            button.setText(
+                                    wasFavorite
+                                            ? "⭐"
+                                            : "☆"
+                            );
+
+                            button.setEnabled(true);
+
+                            Toast.makeText(
+                                    MainActivity.this,
+                                    "No se pudo guardar el favorito",
+                                    Toast.LENGTH_SHORT
+                            ).show();
+                        });
+                    }
+                });
+            }
+    );
+
+    return button;
+}
+
+private Button createFavoriteButtonFromOffline(
+        JSONObject item,
+        String videoId
+) {
+
+    String uri =
+            item.optString(
+                    "uri",
+                    ""
+            );
+
+    String thumbnail =
+            item.optString(
+                    "thumbnail",
+                    ""
+            ).trim();
+
+    if (thumbnail.isEmpty() &&
+            videoId != null &&
+            !videoId.trim().isEmpty()) {
+
+        thumbnail =
+                "https://i.ytimg.com/vi/"
+                        + videoId.trim()
+                        + "/hqdefault.jpg";
+    }
+
+    final String favoriteThumbnail =
+            thumbnail;
+
+    String key =
+            favoriteSongKey(
+                    videoId,
+                    "",
+                    uri
+            );
+
+    Button button =
+            roundedButton();
+
+    button.setText(
+            isFavoriteKey(key)
+                    ? "⭐"
+                    : "☆"
+    );
+
+    button.setOnClickListener(
+            v -> {
+
+                toggleFavoriteSong(
+                        key,
+                        "offline",
+                        videoId,
+                        "",
+                        item.optString(
+                                "title",
+                                "Canción"
+                        ),
+                        item.optString(
+                                "artist",
+                                ""
+                        ),
+                        item.optString(
+                                "album",
+                                ""
+                        ),
+                        favoriteThumbnail,
+                        item.optLong(
+                                "duration",
+                                0
+                        ),
+                        uri
+                );
+
+                button.setText(
+                        isFavoriteKey(key)
+                                ? "⭐"
+                                : "☆"
+                );
+            }
+    );
+
+    return button;
+}
+
+
+private void saveServerUrl() {
 
         String url =
                 serverInput
@@ -2399,6 +5606,173 @@ public class MainActivity extends android.app.Activity {
                 }
             });
         });
+    }
+
+    @Override
+    protected void onSaveInstanceState(
+            Bundle outState) {
+
+        super.onSaveInstanceState(outState);
+
+        /*
+         * Guardamos la pantalla que estaba visible.
+         */
+        outState.putString(
+                "saved_current_screen",
+                currentScreen
+        );
+
+        /*
+         * Guardamos el texto de búsqueda.
+         */
+        if (searchInput != null) {
+
+            outState.putString(
+                    "saved_search_query",
+                    searchInput.getText()
+                            .toString()
+            );
+        }
+
+        /*
+         * Guardamos la página actual.
+         */
+        outState.putInt(
+                "saved_search_page",
+                currentSearchPage
+        );
+
+        /*
+         * Guardamos los resultados completos.
+         *
+         * ApiClient.Song no es Parcelable, así que los
+         * serializamos únicamente para sobrevivir a la
+         * recreación de MainActivity.
+         */
+        JSONArray array =
+                new JSONArray();
+
+        if (currentSearchSongs != null) {
+
+            for (ApiClient.Song song :
+                    currentSearchSongs) {
+
+                if (song == null) continue;
+
+                JSONObject item =
+                        new JSONObject();
+
+                try {
+
+                    item.put(
+                            "number",
+                            song.number
+                    );
+
+                    item.put(
+                            "id",
+                            song.id == null
+                                    ? ""
+                                    : song.id
+                    );
+
+                    item.put(
+                            "videoId",
+                            song.videoId == null
+                                    ? ""
+                                    : song.videoId
+                    );
+
+                    item.put(
+                            "title",
+                            song.title == null
+                                    ? ""
+                                    : song.title
+                    );
+
+                    item.put(
+                            "artist",
+                            song.artist == null
+                                    ? ""
+                                    : song.artist
+                    );
+
+                    item.put(
+                            "channel",
+                            song.channel == null
+                                    ? ""
+                                    : song.channel
+                    );
+
+                    item.put(
+                            "album",
+                            song.album == null
+                                    ? ""
+                                    : song.album
+                    );
+
+                    item.put(
+                            "thumbnail",
+                            song.thumbnail == null
+                                    ? ""
+                                    : song.thumbnail
+                    );
+
+                    item.put(
+                            "duration",
+                            song.duration
+                    );
+
+                    array.put(item);
+
+                } catch (Exception ignored) {
+                }
+            }
+        }
+
+        outState.putString(
+                "saved_search_results",
+                array.toString()
+        );
+
+        /*
+         * Guardamos también el estado de Álbumes.
+         */
+
+        JSONArray savedAlbums =
+                new JSONArray();
+
+        if (lastAlbumSearchResults != null) {
+
+            for (ApiClient.Album album :
+                    lastAlbumSearchResults) {
+
+                if (album == null) continue;
+
+                savedAlbums.put(
+                        albumToJson(
+                                album,
+                                false
+                        )
+                );
+            }
+        }
+
+        outState.putString(
+                "saved_album_search_results",
+                savedAlbums.toString()
+        );
+
+        if (currentOpenedAlbum != null) {
+
+            outState.putString(
+                    "saved_opened_album",
+                    albumToJson(
+                            currentOpenedAlbum,
+                            true
+                    ).toString()
+            );
+        }
     }
 
     private ApiClient api() {
@@ -3989,6 +7363,31 @@ private void loadThumbnail(
                     offlineParams
             );
 
+            Button favorite =
+                    createFavoriteButton(
+                            song,
+                            "music"
+                    );
+
+            LinearLayout.LayoutParams favoriteParams =
+                    new LinearLayout.LayoutParams(
+                            0,
+                            dp(44),
+                            0.35f
+                    );
+
+            favoriteParams.setMargins(
+                    dp(6),
+                    0,
+                    0,
+                    0
+            );
+
+            buttons.addView(
+                    favorite,
+                    favoriteParams
+            );
+
             card.addView(
                     buttons,
                     buttonsParams
@@ -4361,10 +7760,54 @@ private void loadThumbnail(
                         continue;
                     }
 
-                    String url =
-                            api().getPreviewUrl(
-                                    videoId
-                            );
+                    String url = null;
+
+                    /*
+                     * Si cambia Wi-Fi <-> 4G mientras se prepara esta
+                     * canción, conservamos el videoId y volvemos a pedir
+                     * una URL nueva cuando la conexión esté disponible.
+                     *
+                     * Cada intento crea un ApiClient nuevo.
+                     * Máximo: 60 segundos, esperando 3 segundos entre
+                     * intentos.
+                     */
+                    final long retryDeadline =
+                            System.currentTimeMillis() + 60000L;
+
+                    while (
+                            System.currentTimeMillis() <
+                            retryDeadline
+                    ) {
+
+                        try {
+
+                            url =
+                                    api().getPreviewUrl(
+                                            videoId
+                                    );
+
+                            if (
+                                    url != null &&
+                                    !url.trim().isEmpty()
+                            ) {
+                                break;
+                            }
+
+                        } catch (Exception retryError) {
+
+                            // La red puede estar cambiando.
+                        }
+
+                        try {
+
+                            Thread.sleep(3000L);
+
+                        } catch (InterruptedException interrupted) {
+
+                            Thread.currentThread().interrupt();
+                            throw interrupted;
+                        }
+                    }
 
                     if (
                             url == null ||
@@ -4563,6 +8006,7 @@ private void loadThumbnail(
 
                 handler.post(
                         () -> playResolved(
+                                videoId,
                                 url,
                                 title,
                                 thumbnail
@@ -4583,6 +8027,245 @@ private void loadThumbnail(
      * ÁLBUMES
      * ============================================================
      */
+
+    /*
+     * ============================================================
+     * ESTADO DE ÁLBUMES - ROTACIÓN
+     * ============================================================
+     */
+
+    private JSONObject albumToJson(
+            ApiClient.Album album,
+            boolean includeTracks) {
+
+        JSONObject result = new JSONObject();
+
+        if (album == null) {
+            return result;
+        }
+
+        try {
+            result.put(
+                    "id",
+                    album.id == null ? "" : album.id
+            );
+
+            result.put(
+                    "title",
+                    album.title == null ? "" : album.title
+            );
+
+            result.put(
+                    "artist",
+                    album.artist == null ? "" : album.artist
+            );
+
+            result.put(
+                    "date",
+                    album.date == null ? "" : album.date
+            );
+
+            result.put(
+                    "type",
+                    album.type == null ? "" : album.type
+            );
+
+            if (includeTracks) {
+
+                JSONArray tracks =
+                        new JSONArray();
+
+                if (album.tracks != null) {
+
+                    for (ApiClient.Song song :
+                            album.tracks) {
+
+                        if (song == null) continue;
+
+                        JSONObject item =
+                                new JSONObject();
+
+                        item.put(
+                                "number",
+                                song.number
+                        );
+
+                        item.put(
+                                "id",
+                                song.id == null
+                                        ? ""
+                                        : song.id
+                        );
+
+                        item.put(
+                                "videoId",
+                                song.videoId == null
+                                        ? ""
+                                        : song.videoId
+                        );
+
+                        item.put(
+                                "title",
+                                song.title == null
+                                        ? ""
+                                        : song.title
+                        );
+
+                        item.put(
+                                "artist",
+                                song.artist == null
+                                        ? ""
+                                        : song.artist
+                        );
+
+                        item.put(
+                                "channel",
+                                song.channel == null
+                                        ? ""
+                                        : song.channel
+                        );
+
+                        item.put(
+                                "album",
+                                song.album == null
+                                        ? ""
+                                        : song.album
+                        );
+
+                        item.put(
+                                "thumbnail",
+                                song.thumbnail == null
+                                        ? ""
+                                        : song.thumbnail
+                        );
+
+                        item.put(
+                                "duration",
+                                song.duration
+                        );
+
+                        tracks.put(item);
+                    }
+                }
+
+                result.put(
+                        "tracks",
+                        tracks
+                );
+            }
+
+        } catch (Exception ignored) {
+        }
+
+        return result;
+    }
+
+    private ApiClient.Album albumFromJson(
+            JSONObject json,
+            boolean includeTracks) {
+
+        if (json == null) {
+            return null;
+        }
+
+        ApiClient.Album album =
+                new ApiClient.Album();
+
+        album.id =
+                json.optString("id", "");
+
+        album.title =
+                json.optString("title", "");
+
+        album.artist =
+                json.optString("artist", "");
+
+        album.date =
+                json.optString("date", "");
+
+        album.type =
+                json.optString("type", "");
+
+        if (includeTracks) {
+
+            JSONArray tracks =
+                    json.optJSONArray("tracks");
+
+            if (tracks != null) {
+
+                for (int i = 0;
+                        i < tracks.length();
+                        i++) {
+
+                    JSONObject item =
+                            tracks.optJSONObject(i);
+
+                    if (item == null) continue;
+
+                    ApiClient.Song song =
+                            new ApiClient.Song();
+
+                    song.number =
+                            item.optInt(
+                                    "number",
+                                    0
+                            );
+
+                    song.id =
+                            item.optString(
+                                    "id",
+                                    ""
+                            );
+
+                    song.videoId =
+                            item.optString(
+                                    "videoId",
+                                    ""
+                            );
+
+                    song.title =
+                            item.optString(
+                                    "title",
+                                    ""
+                            );
+
+                    song.artist =
+                            item.optString(
+                                    "artist",
+                                    ""
+                            );
+
+                    song.channel =
+                            item.optString(
+                                    "channel",
+                                    ""
+                            );
+
+                    song.album =
+                            item.optString(
+                                    "album",
+                                    ""
+                            );
+
+                    song.thumbnail =
+                            item.optString(
+                                    "thumbnail",
+                                    ""
+                            );
+
+                    song.duration =
+                            item.optInt(
+                                    "duration",
+                                    0
+                            );
+
+                    album.tracks.add(song);
+                }
+            }
+        }
+
+        return album;
+    }
 
     private void searchAlbums() {
 
@@ -4626,12 +8309,20 @@ private void loadThumbnail(
     private void showAlbums(
             List<ApiClient.Album> albums) {
 
+        currentOpenedAlbum = null;
+
         lastAlbumSearchResults =
                 albums == null
                         ? new ArrayList<>()
                         : new ArrayList<>(albums);
 
         showMainHome();
+
+        /*
+         * showMainHome() marca la pantalla como Música.
+         * Aquí realmente estamos mostrando la lista de Álbumes.
+         */
+        currentScreen = "albums";
 
         contentLayout.removeAllViews();
 
@@ -4901,6 +8592,9 @@ private void loadThumbnail(
     private void showAlbum(
             ApiClient.Album album) {
 
+        currentScreen = "album";
+        currentOpenedAlbum = album;
+
         contentLayout.removeAllViews();
 
         /*
@@ -4975,6 +8669,8 @@ private void loadThumbnail(
                             lastAlbumSearchResults != null &&
                             !lastAlbumSearchResults.isEmpty()
                     ) {
+                        currentOpenedAlbum = null;
+
                         showAlbums(
                                 lastAlbumSearchResults
                         );
@@ -5073,8 +8769,43 @@ private void loadThumbnail(
 
         Button playAlbum =
                 visualButton(
-                        "▶ REPRODUCIR ÁLBUM COMPLETO"
+                        "▶  REPRODUCIR ÁLBUM COMPLETO"
                 );
+
+        Button favoriteAlbum =
+                visualButton(
+                        "☆  FAVORITO"
+                );
+
+        LinearLayout.LayoutParams favoriteAlbumParams =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(46)
+                );
+
+        favoriteAlbumParams.setMargins(
+                0,
+                dp(6),
+                0,
+                dp(6)
+        );
+
+        favoriteAlbum.setOnClickListener(
+                v -> {
+
+                    toggleFavoriteAlbum(
+                            album
+                    );
+
+                    favoriteAlbum.setText(
+                            isFavoriteKey(
+                                    "album:" + album.id
+                            )
+                                    ? "⭐  FAVORITO"
+                                    : "☆  FAVORITO"
+                    );
+                }
+        );
 
         playAlbum.setOnClickListener(
                 v -> playAlbum(album)
@@ -5086,6 +8817,12 @@ private void loadThumbnail(
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         dp(48)
                 )
+        );
+
+
+        contentLayout.addView(
+                favoriteAlbum,
+                favoriteAlbumParams
         );
 
         /*
@@ -5416,6 +9153,39 @@ private void loadThumbnail(
                     offlineParams
             );
 
+            Button favorite =
+                    createFavoriteButton(
+                            track,
+                            "album"
+                    );
+
+            favorite.setClickable(true);
+            favorite.setFocusable(true);
+
+            if (android.os.Build.VERSION.SDK_INT >= 21) {
+                favorite.setTranslationZ(
+                        dp(1)
+                );
+            }
+
+            LinearLayout.LayoutParams favoriteParams =
+                    new LinearLayout.LayoutParams(
+                            dp(58),
+                            dp(44)
+                    );
+
+            favoriteParams.setMargins(
+                    dp(6),
+                    0,
+                    0,
+                    0
+            );
+
+            buttons.addView(
+                    favorite,
+                    favoriteParams
+            );
+
             card.addView(
                     buttons,
                     buttonsParams
@@ -5670,16 +9440,17 @@ private void loadThumbnail(
 
             try {
 
-                ApiClient.Song resolved =
-                        api().resolveAlbumTrack(
+                SpotifyResolvedTrack resolvedResult =
+                        resolveSpotifyTrackWithRetry(
                                 track.artist,
                                 track.title
                         );
 
+                ApiClient.Song resolved =
+                        resolvedResult.resolved;
+
                 String url =
-                        api().getPreviewUrl(
-                                resolved.id
-                        );
+                        resolvedResult.url;
 
                 String thumbnail =
                         track.thumbnail;
@@ -5709,6 +9480,7 @@ private void loadThumbnail(
 
                 handler.post(
                         () -> playResolved(
+                                resolved.id,
                                 url,
                                 resolved.title,
                                 finalThumbnail
@@ -5729,6 +9501,7 @@ private void loadThumbnail(
             String title) {
 
         playResolved(
+                "",
                 url,
                 title,
                 ""
@@ -5736,6 +9509,7 @@ private void loadThumbnail(
     }
 
     private void playResolved(
+            String videoId,
             String url,
             String title,
             String thumbnail) {
@@ -5764,6 +9538,9 @@ private void loadThumbnail(
 
         MediaItem item =
                 new MediaItem.Builder()
+                        .setMediaId(
+                                videoId == null ? "" : videoId
+                        )
                         .setUri(url)
                         .setMediaMetadata(
                                 metadata.build()
@@ -5773,6 +9550,120 @@ private void loadThumbnail(
         mediaController.setMediaItem(item);
         mediaController.prepare();
         mediaController.play();
+    }
+
+    private static class AlbumResolvedTrack {
+        final ApiClient.Song resolved;
+        final String url;
+
+        AlbumResolvedTrack(
+                ApiClient.Song resolved,
+                String url) {
+            this.resolved = resolved;
+            this.url = url;
+        }
+    }
+
+    private AlbumResolvedTrack resolveAlbumTrackWithRetry(
+            String artist,
+            String title) throws Exception {
+
+        final long retryDeadline =
+                System.currentTimeMillis() + 60000L;
+
+        Exception lastError = null;
+
+        while (System.currentTimeMillis() < retryDeadline) {
+
+            try {
+
+                ApiClient.Song resolved =
+                        api().resolveAlbumTrack(
+                                artist,
+                                title
+                        );
+
+                if (resolved == null ||
+                        resolved.id == null ||
+                        resolved.id.trim().isEmpty()) {
+                    throw new Exception(
+                            "No se pudo obtener videoId"
+                    );
+                }
+
+                String url =
+                        api().getPreviewUrl(
+                                resolved.id
+                        );
+
+                if (url == null ||
+                        url.trim().isEmpty()) {
+                    throw new Exception(
+                            "No se obtuvo URL de reproducción"
+                    );
+                }
+
+                return new AlbumResolvedTrack(
+                        resolved,
+                        url
+                );
+
+            } catch (Exception error) {
+
+                lastError = error;
+
+                try {
+                    Thread.sleep(3000L);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw interrupted;
+                }
+            }
+        }
+
+        if (lastError != null) {
+            throw lastError;
+        }
+
+        throw new Exception(
+                "Tiempo agotado esperando conexión"
+        );
+    }
+
+    private void markAlbumTrackObtainedIndividual(
+            long generation,
+            int trackIndex) {
+
+        handler.post(() -> {
+
+            if (!isCurrentIndividualPlayback(
+                    generation)) {
+                return;
+            }
+
+            if (
+                    trackIndex < 0 ||
+                    trackIndex >=
+                            albumPreparationStatusViews.size()
+            ) {
+                return;
+            }
+
+            TextView status =
+                    albumPreparationStatusViews.get(
+                            trackIndex
+                    );
+
+            if (status != null) {
+                status.setText("✓ OBTENIDA");
+                status.setTextColor(
+                        Color.rgb(80, 220, 130)
+                );
+                status.setVisibility(
+                        android.view.View.VISIBLE
+                );
+            }
+        });
     }
 
     private void playAlbumFromIndex(
@@ -5790,6 +9681,14 @@ private void loadThumbnail(
         final long playbackGeneration =
                 beginIndividualPlayback();
 
+        final int preparationTotal =
+                album.tracks.size() - startIndex;
+
+        final long queueGeneration =
+                beginQueuePreparation(
+                        preparationTotal
+                );
+
         Toast.makeText(
                 this,
                 "Preparando desde la pista "
@@ -5804,41 +9703,28 @@ private void loadThumbnail(
                 ApiClient.Song firstTrack =
                         album.tracks.get(startIndex);
 
-                ApiClient.Song firstResolved =
-                        api().resolveAlbumTrack(
+                AlbumResolvedTrack firstResolvedResult =
+                        resolveAlbumTrackWithRetry(
                                 firstTrack.artist,
                                 firstTrack.title
                         );
 
-                if (firstResolved == null ||
-                        firstResolved.id == null ||
-                        firstResolved.id.trim().isEmpty()) {
-                    handler.post(() ->
-                            Toast.makeText(
-                                    this,
-                                    "No se pudo preparar la pista",
-                                    Toast.LENGTH_SHORT
-                            ).show()
-                    );
-                    return;
-                }
+                ApiClient.Song firstResolved =
+                        firstResolvedResult.resolved;
 
                 String firstUrl =
-                        api().getPreviewUrl(
-                                firstResolved.id
-                        );
+                        firstResolvedResult.url;
 
-                if (firstUrl == null ||
-                        firstUrl.trim().isEmpty()) {
-                    handler.post(() ->
-                            Toast.makeText(
-                                    this,
-                                    "No se pudo obtener el audio",
-                                    Toast.LENGTH_SHORT
-                            ).show()
-                    );
-                    return;
-                }
+                markAlbumTrackObtainedIndividual(
+                        playbackGeneration,
+                        startIndex
+                );
+
+                updateQueuePreparationProgress(
+                        queueGeneration,
+                        1,
+                        preparationTotal
+                );
 
                 String firstThumbnail =
                         firstTrack.thumbnail;
@@ -5929,6 +9815,9 @@ private void loadThumbnail(
 
                 int submitted = 0;
 
+                java.util.concurrent.atomic.AtomicInteger preparationLoaded =
+                        new java.util.concurrent.atomic.AtomicInteger(1);
+
                 for (
                         int index = startIndex + 1;
                         index < album.tracks.size();
@@ -5942,27 +9831,28 @@ private void loadThumbnail(
                         ApiClient.Song track =
                                 album.tracks.get(trackIndex);
 
-                        ApiClient.Song resolved =
-                                api().resolveAlbumTrack(
+                        AlbumResolvedTrack resolvedResult =
+                                resolveAlbumTrackWithRetry(
                                         track.artist,
                                         track.title
                                 );
 
-                        if (resolved == null ||
-                                resolved.id == null ||
-                                resolved.id.trim().isEmpty()) {
-                            return null;
-                        }
+                        ApiClient.Song resolved =
+                                resolvedResult.resolved;
 
                         String url =
-                                api().getPreviewUrl(
-                                        resolved.id
-                                );
+                                resolvedResult.url;
 
-                        if (url == null ||
-                                url.trim().isEmpty()) {
-                            return null;
-                        }
+                        markAlbumTrackObtainedIndividual(
+                                playbackGeneration,
+                                trackIndex
+                        );
+
+                        updateQueuePreparationProgress(
+                                queueGeneration,
+                                preparationLoaded.incrementAndGet(),
+                                preparationTotal
+                        );
 
                         String thumbnail =
                                 track.thumbnail;
@@ -6129,35 +10019,17 @@ Toast.makeText(
 
                 try {
 
-                    ApiClient.Song resolved =
-                            api().resolveAlbumTrack(
+                    AlbumResolvedTrack resolvedResult =
+                            resolveAlbumTrackWithRetry(
                                     track.artist,
                                     track.title
                             );
 
-                    if (
-                            resolved == null ||
-                            resolved.id == null ||
-                            resolved.id.trim().isEmpty()
-                    ) {
-
-                        failed++;
-                        continue;
-                    }
+                    ApiClient.Song resolved =
+                            resolvedResult.resolved;
 
                     String url =
-                            api().getPreviewUrl(
-                                    resolved.id
-                            );
-
-                    if (
-                            url == null ||
-                            url.trim().isEmpty()
-                    ) {
-
-                        failed++;
-                        continue;
-                    }
+                            resolvedResult.url;
 
                     String thumbnail =
                             track.thumbnail;
@@ -6342,6 +10214,8 @@ Toast.makeText(
      */
 
     private void showSpotifyHome() {
+
+        currentScreen = "spotify";
 
         if (spotifyTabLayout == null ||
                 spotifyTabScroll == null) {
@@ -7310,6 +11184,9 @@ Toast.makeText(
             new ArrayList<>();
 
     private final List<CheckBox> offlineSelectionChecks =
+            new ArrayList<>();
+
+    private final List<CheckBox> favoriteSelectionChecks =
             new ArrayList<>();
 
     private final List<ApiClient.SpotifyTrack> spotifySelectionTracks =
@@ -8962,6 +12839,39 @@ selectionButtons.addView(
                     offlineParams
             );
 
+            Button favorite =
+                    createFavoriteButton(
+                            track,
+                            "spotify"
+                    );
+
+            favorite.setClickable(true);
+            favorite.setFocusable(true);
+
+            if (android.os.Build.VERSION.SDK_INT >= 21) {
+                favorite.setTranslationZ(
+                        dp(1)
+                );
+            }
+
+            LinearLayout.LayoutParams favoriteParams =
+                    new LinearLayout.LayoutParams(
+                            dp(58),
+                            dp(40)
+                    );
+
+            favoriteParams.setMargins(
+                    dp(4),
+                    0,
+                    0,
+                    0
+            );
+
+            buttons.addView(
+                    favorite,
+                    favoriteParams
+            );
+
             row.addView(
                     buttons,
                     buttonsParams
@@ -9675,16 +13585,17 @@ if (playlist == null ||
 
             try {
 
-                ApiClient.Song resolved =
-                        api().resolveAlbumTrack(
+                SpotifyResolvedTrack resolvedResult =
+                        resolveSpotifyTrackWithRetry(
                                 track.artist,
                                 track.title
                         );
 
+                ApiClient.Song resolved =
+                        resolvedResult.resolved;
+
                 String url =
-                        api().getPreviewUrl(
-                                resolved.id
-                        );
+                        resolvedResult.url;
 
                 String thumbnail =
                         track.thumbnail;
@@ -9704,6 +13615,7 @@ if (playlist == null ||
 
                 handler.post(
                         () -> playResolved(
+                                resolved.id,
                                 url,
                                 track.artist
                                         + " - "
@@ -9719,6 +13631,106 @@ if (playlist == null ||
                 );
             }
         });
+    }
+
+    private static class SpotifyResolvedTrack {
+
+        final ApiClient.Song resolved;
+        final String url;
+
+        SpotifyResolvedTrack(
+                ApiClient.Song resolved,
+                String url) {
+
+            this.resolved = resolved;
+            this.url = url;
+        }
+    }
+
+    /*
+     * Resuelve una canción de Spotify de principio a fin.
+     *
+     * Si cambia Wi-Fi <-> 4G durante cualquiera de las peticiones,
+     * conserva artista + título y vuelve a empezar el proceso.
+     *
+     * Cada intento utiliza un ApiClient nuevo.
+     * Tiempo máximo: 60 segundos.
+     * Espera entre intentos: 3 segundos.
+     */
+    private SpotifyResolvedTrack resolveSpotifyTrackWithRetry(
+            String artist,
+            String title) throws Exception {
+
+        final long retryDeadline =
+                System.currentTimeMillis() + 60000L;
+
+        Exception lastError = null;
+
+        while (
+                System.currentTimeMillis() <
+                retryDeadline
+        ) {
+
+            try {
+
+                ApiClient.Song resolved =
+                        api().resolveAlbumTrack(
+                                artist,
+                                title
+                        );
+
+                if (
+                        resolved == null ||
+                        resolved.id == null ||
+                        resolved.id.trim().isEmpty()
+                ) {
+                    throw new Exception(
+                            "No se pudo obtener videoId"
+                    );
+                }
+
+                String url =
+                        api().getPreviewUrl(
+                                resolved.id
+                        );
+
+                if (
+                        url == null ||
+                        url.trim().isEmpty()
+                ) {
+                    throw new Exception(
+                            "No se obtuvo URL de reproducción"
+                    );
+                }
+
+                return new SpotifyResolvedTrack(
+                        resolved,
+                        url
+                );
+
+            } catch (Exception error) {
+
+                lastError = error;
+
+                try {
+
+                    Thread.sleep(3000L);
+
+                } catch (InterruptedException interrupted) {
+
+                    Thread.currentThread().interrupt();
+                    throw interrupted;
+                }
+            }
+        }
+
+        if (lastError != null) {
+            throw lastError;
+        }
+
+        throw new Exception(
+                "Tiempo agotado esperando conexión"
+        );
     }
 
     private void playSpotifyPlaylist(
@@ -9800,16 +13812,17 @@ Toast.makeText(
                     return;
                 }
 
-                ApiClient.Song firstResolved =
-                        api().resolveAlbumTrack(
+                SpotifyResolvedTrack firstResolvedResult =
+                        resolveSpotifyTrackWithRetry(
                                 firstTrack.artist,
                                 firstTrack.title
                         );
 
+                ApiClient.Song firstResolved =
+                        firstResolvedResult.resolved;
+
                 String firstUrl =
-                        api().getPreviewUrl(
-                                firstResolved.id
-                        );
+                        firstResolvedResult.url;
 
                 MediaMetadata.Builder firstMetadata =
                         new MediaMetadata.Builder()
@@ -9965,16 +13978,17 @@ Toast.makeText(
                                 );
                             }
 
-                            ApiClient.Song resolved =
-                                    api().resolveAlbumTrack(
+                            SpotifyResolvedTrack resolvedResult =
+                                    resolveSpotifyTrackWithRetry(
                                             track.artist,
                                             track.title
                                     );
 
+                            ApiClient.Song resolved =
+                                    resolvedResult.resolved;
+
                             String url =
-                                    api().getPreviewUrl(
-                                            resolved.id
-                                    );
+                                    resolvedResult.url;
 
                             MediaMetadata.Builder metadata =
                                     new MediaMetadata.Builder()
@@ -10468,10 +14482,7 @@ Toast.makeText(
             String job,
             DownloadSlot slot) {
 
-        Log.d(
-                "MUSIC_DOWNLOAD_DEBUG",
-                "WATCH OFFLINE INICIADO: job=" + job
-        );
+        ;
 
         final PowerManager powerManager =
                 (PowerManager) getSystemService(
@@ -10490,10 +14501,7 @@ Toast.makeText(
             wakeLock.acquire();
         }
 
-        Log.d(
-                "MUSIC_DOWNLOAD_DEBUG",
-                "WAKELOCK ADQUIRIDO: job=" + job
-        );
+        ;
 
         final Handler pollHandler =
                 new Handler(
@@ -10505,10 +14513,7 @@ Toast.makeText(
 
         checker[0] = () -> {
 
-            Log.d(
-                    "MUSIC_DOWNLOAD_DEBUG",
-                    "POLL OFFLINE: consultando job=" + job
-            );
+            ;
 
             executor.execute(() -> {
 
@@ -10517,10 +14522,7 @@ Toast.makeText(
                     JSONObject data =
                             api().getDownloadStatus(job);
 
-                    Log.d(
-                            "MUSIC_DOWNLOAD_DEBUG",
-                            "POLL RESPUESTA: " + data.toString()
-                    );
+                    ;
 
                     String state =
                             data.optString(
@@ -10540,23 +14542,11 @@ Toast.makeText(
                                     ""
                             );
 
-                    Log.d(
-                            "MUSIC_DOWNLOAD_DEBUG",
-                            "POLL DATOS: state="
-                                    + state
-                                    + " progress="
-                                    + progress
-                                    + " message="
-                                    + message
-                    );
+                    ;
 
                     handler.post(() -> {
 
-                        Log.d(
-                                "MUSIC_DOWNLOAD_DEBUG",
-                                "POLL UI: state="
-                                        + state
-                        );
+                        ;
 
                         int safeProgress =
                                 Math.max(
@@ -10590,10 +14580,7 @@ Toast.makeText(
                                 || "downloading".equals(state)
                                 || "processing".equals(state)) {
 
-                            Log.d(
-                                    "MUSIC_DOWNLOAD_DEBUG",
-                                    "POLL: descarga todavía activa"
-                            );
+                            ;
 
                             slot.status.setText(
                                     "📱 "
@@ -10615,10 +14602,7 @@ Toast.makeText(
 
                         } else if ("done".equals(state)) {
 
-                            Log.d(
-                                    "MUSIC_DOWNLOAD_DEBUG",
-                                    "POLL: ESTADO DONE -> saveMobileDownload()"
-                            );
+                            ;
 
                             slot.progress.setProgress(
                                     99
@@ -10645,18 +14629,11 @@ Toast.makeText(
                                     wakeLock
                             );
 
-                            Log.d(
-                                    "MUSIC_DOWNLOAD_DEBUG",
-                                    "POLL: saveMobileDownload() LLAMADO"
-                            );
+                            ;
 
                         } else if ("cancelled".equals(state)) {
 
-                            Log.d(
-                                    "MUSIC_DOWNLOAD_DEBUG",
-                                    "POLL: ESTADO CANCELLED: "
-                                            + message
-                            );
+                            ;
 
                             String cancelledStatus =
                                     "✕ "
@@ -10688,19 +14665,11 @@ Toast.makeText(
                                 wakeLock.release();
                             }
 
-                            Log.d(
-                                    "MUSIC_DOWNLOAD_DEBUG",
-                                    "WAKELOCK LIBERADO: descarga cancelada job="
-                                            + job
-                            );
+                            ;
 
                         } else if ("error".equals(state)) {
 
-                            Log.d(
-                                    "MUSIC_DOWNLOAD_DEBUG",
-                                    "POLL: ESTADO ERROR: "
-                                            + message
-                            );
+                            ;
 
                             String errorStatus =
                                     "❌ "
@@ -10732,18 +14701,11 @@ Toast.makeText(
                                 wakeLock.release();
                             }
 
-                            Log.d(
-                                    "MUSIC_DOWNLOAD_DEBUG",
-                                    "WAKELOCK LIBERADO: job=" + job
-                            );
+                            ;
 
                         } else {
 
-                            Log.d(
-                                    "MUSIC_DOWNLOAD_DEBUG",
-                                    "POLL: ESTADO DESCONOCIDO: "
-                                            + state
-                            );
+                            ;
 
                             pollHandler.postDelayed(
                                     checker[0],
@@ -10754,13 +14716,7 @@ Toast.makeText(
 
                 } catch (Exception e) {
 
-                    Log.e(
-                            "MUSIC_DOWNLOAD_DEBUG",
-                            "POLL ERROR consultando job="
-                                    + job
-                                    + " - reintentando...",
-                            e
-                    );
+                    ;
 
                     handler.post(() -> {
 
@@ -10800,23 +14756,11 @@ Toast.makeText(
         final long saveStartTime =
                 System.currentTimeMillis();
 
-        Log.d(
-                "MUSIC_DOWNLOAD_DEBUG",
-                "TIMING 1: saveMobileDownload() llamado"
-                        + " job=" + job
-        );
+        ;
 
         executor.execute(() -> {
 
-            Log.d(
-                    "MUSIC_DOWNLOAD_DEBUG",
-                    "TIMING 2: executor iniciado"
-                            + " job=" + job
-                            + " +"
-                            + (System.currentTimeMillis()
-                                    - saveStartTime)
-                            + " ms"
-            );
+            ;
 
             HttpURLConnection connection = null;
 
@@ -10828,15 +14772,7 @@ Toast.makeText(
                     );
                 }
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "TIMING 3: obteniendo DocumentFile"
-                                + " job=" + job
-                                + " +"
-                                + (System.currentTimeMillis()
-                                        - saveStartTime)
-                                + " ms"
-                );
+                ;
 
                 DocumentFile folder =
                         DocumentFile.fromTreeUri(
@@ -10844,15 +14780,7 @@ Toast.makeText(
                                 offlineFolderUri
                         );
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "TIMING 4: DocumentFile obtenido"
-                                + " job=" + job
-                                + " +"
-                                + (System.currentTimeMillis()
-                                        - saveStartTime)
-                                + " ms"
-                );
+                ;
 
                 if (folder == null
                         || !folder.isDirectory()
@@ -10987,25 +14915,9 @@ Toast.makeText(
                     } while (target != null);
                 }
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "TIMING 5: creando archivo offline"
-                                + " job=" + job
-                                + " +"
-                                + (System.currentTimeMillis()
-                                        - saveStartTime)
-                                + " ms"
-                );
+                ;
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "FORMATO OFFLINE: "
-                                + format
-                                + " mime="
-                                + mimeType
-                                + " filename="
-                                + finalFilename
-                );
+                ;
 
                 target =
                         folder.createFile(
@@ -11013,15 +14925,7 @@ Toast.makeText(
                                 finalFilename
                         );
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "TIMING 6: archivo offline creado"
-                                + " job=" + job
-                                + " +"
-                                + (System.currentTimeMillis()
-                                        - saveStartTime)
-                                + " ms"
-                );
+                ;
 
                 if (target == null) {
                     throw new Exception(
@@ -11029,15 +14933,7 @@ Toast.makeText(
                     );
                 }
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "TIMING 7: preparando conexión HTTP"
-                                + " job=" + job
-                                + " +"
-                                + (System.currentTimeMillis()
-                                        - saveStartTime)
-                                + " ms"
-                );
+                ;
 
                 URL url =
                         new URL(
@@ -11079,34 +14975,16 @@ Toast.makeText(
 
                 connection.setUseCaches(false);
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "TRANSFER: iniciando descarga HTTP para job=" + job
-                );
+                ;
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "TRANSFER: URL=" + url
-                );
+                ;
 
                 int responseCode =
                         connection.getResponseCode();
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "TIMING 8: respuesta HTTP recibida"
-                                + " job=" + job
-                                + " +"
-                                + (System.currentTimeMillis()
-                                        - saveStartTime)
-                                + " ms"
-                );
+                ;
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "TRANSFER: HTTP response=" + responseCode
-                                + " job=" + job
-                );
+                ;
 
                 if (responseCode != HttpURLConnection.HTTP_OK) {
                     throw new Exception(
@@ -11118,19 +14996,7 @@ Toast.makeText(
                 long totalBytes =
                         connection.getContentLengthLong();
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "TRANSFER: tamaño esperado="
-                                + totalBytes
-                                + " bytes ("
-                                + (
-                                totalBytes > 0
-                                        ? (totalBytes / 1024 / 1024)
-                                                + " MB"
-                                        : "desconocido"
-                        )
-                        + ") job=" + job
-                );
+                ;
 
                 long downloadedBytes = 0;
                 long lastLoggedBytes = 0;
@@ -11154,21 +15020,9 @@ Toast.makeText(
                         );
                     }
 
-                    Log.d(
-                            "MUSIC_DOWNLOAD_DEBUG",
-                            "TIMING 9: transferencia realmente iniciada"
-                                    + " job=" + job
-                                    + " +"
-                                    + (System.currentTimeMillis()
-                                            - saveStartTime)
-                                    + " ms"
-                    );
+                    ;
 
-                    Log.d(
-                            "MUSIC_DOWNLOAD_DEBUG",
-                            "TRANSFER: InputStream y OutputStream abiertos"
-                                    + " job=" + job
-                    );
+                    ;
 
                     byte[] buffer =
                             new byte[256 * 1024];
@@ -11199,23 +15053,7 @@ Toast.makeText(
                             lastLoggedBytes =
                                     downloadedBytes;
 
-                            Log.d(
-                                    "MUSIC_DOWNLOAD_DEBUG",
-                                    "TRANSFER: "
-                                            + downloadedBytes
-                                            + " / "
-                                            + totalBytes
-                                            + " bytes ("
-                                            + (
-                                            totalBytes > 0
-                                                    ? (
-                                                    downloadedBytes * 100L
-                                                            / totalBytes
-                                                    )
-                                                    : -1
-                                            )
-                                            + "%) job=" + job
-                            );
+                            ;
                         }
 
                         if (totalBytes > 0) {
@@ -11244,20 +15082,10 @@ Toast.makeText(
 
                     output.flush();
 
-                    Log.d(
-                            "MUSIC_DOWNLOAD_DEBUG",
-                            "TRANSFER: output.flush() completado"
-                                    + " bytes=" + downloadedBytes
-                                    + " job=" + job
-                    );
+                    ;
                 }
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "TRANSFER: streams cerrados"
-                                + " bytes=" + downloadedBytes
-                                + " job=" + job
-                );
+                ;
 
                 if (totalBytes > 0
                         && downloadedBytes != totalBytes) {
@@ -11271,12 +15099,7 @@ Toast.makeText(
                     );
                 }
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "TRANSFER: COMPLETADA correctamente"
-                                + " bytes=" + downloadedBytes
-                                + " job=" + job
-                );
+                ;
 
                 final long finalSize =
                         downloadedBytes;
@@ -11331,15 +15154,7 @@ Toast.makeText(
 
             } catch (Exception e) {
 
-                Log.e(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "TRANSFER ERROR: job=" + job
-                                + " tipo="
-                                + e.getClass().getName()
-                                + " mensaje="
-                                + e.getMessage(),
-                        e
-                );
+                ;
 
                 handler.post(() -> {
 
@@ -11379,10 +15194,7 @@ Toast.makeText(
                 if (wakeLock != null && wakeLock.isHeld()) {
                     wakeLock.release();
 
-                    Log.d(
-                            "MUSIC_DOWNLOAD_DEBUG",
-                            "WAKELOCK LIBERADO: transferencia finalizada job=" + job
-                    );
+                    ;
                 }
             }
         });
@@ -11429,17 +15241,11 @@ Toast.makeText(
     private void startMobileDownload(
             DownloadSlot slot) {
 
-        Log.d(
-                "MUSIC_DOWNLOAD_DEBUG",
-                "ENTRÓ EN startMobileDownload: " + slot.title
-        );
+        ;
 
         if (offlineFolderUri == null) {
 
-            Log.d(
-                    "MUSIC_DOWNLOAD_DEBUG",
-                    "OFFLINE FALLA: offlineFolderUri == null"
-            );
+            ;
 
             Toast.makeText(
                     this,
@@ -11451,16 +15257,9 @@ Toast.makeText(
             return;
         }
 
-        Log.d(
-                "MUSIC_DOWNLOAD_DEBUG",
-                "offlineFolderUri OK: " + offlineFolderUri
-        );
+        ;
 
-        Log.d(
-                "MUSIC_DOWNLOAD_DEBUG",
-                "videoId=" + slot.videoId
-                        + " title=" + slot.title
-        );
+        ;
 
         slot.button.setEnabled(false);
 
@@ -11482,13 +15281,7 @@ Toast.makeText(
 
             try {
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "ANTES DE api().downloadMobile: id="
-                                + slot.videoId
-                                + " title="
-                                + slot.title
-                );
+                ;
 
                 JSONObject result;
 
@@ -11522,11 +15315,7 @@ Toast.makeText(
                         );
                 }
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "RESPUESTA api().downloadMobile: "
-                                + result.toString()
-                );
+                ;
 
                 String job =
                         result.optString(
@@ -11534,10 +15323,7 @@ Toast.makeText(
                                 ""
                         );
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "JOB OFFLINE: " + job
-                );
+                ;
 
                 if (job.isEmpty()) {
 
@@ -11569,11 +15355,7 @@ Toast.makeText(
 
             } catch (Exception e) {
 
-                Log.e(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "ERROR EN startMobileDownload",
-                        e
-                );
+                ;
 
                 handler.post(() -> {
 
@@ -11738,10 +15520,7 @@ Toast.makeText(
     private void startNormalDownload(
             DownloadSlot slot) {
 
-        Log.d(
-                "MUSIC_DOWNLOAD_DEBUG",
-                "ENTRÓ EN startNormalDownload: " + slot.title
-        );
+        ;
 
         slot.button.setEnabled(false);
 
@@ -11759,13 +15538,7 @@ Toast.makeText(
 
             try {
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "ANTES DE api().download: id="
-                                + slot.videoId
-                                + " title="
-                                + slot.title
-                );
+                ;
 
                 JSONObject result =
                         api().download(
@@ -11773,11 +15546,7 @@ Toast.makeText(
                                 slot.title
                         );
 
-                Log.d(
-                        "MUSIC_DOWNLOAD_DEBUG",
-                        "RESPUESTA api().download: "
-                                + result.toString()
-                );
+                ;
 
                 String job =
                         result.optString(
@@ -13258,6 +17027,10 @@ private JSONArray scanOfflineFolder() {
     JSONArray library =
             loadOfflineLibrary();
 
+    /*
+     * Sin carpeta configurada no podemos sincronizar.
+     * Conservamos la caché existente.
+     */
     if (offlineFolderUri == null) {
         return library;
     }
@@ -13270,37 +17043,29 @@ private JSONArray scanOfflineFolder() {
                         offlineFolderUri
                 );
 
+        /*
+         * Si SAF no puede abrir la carpeta, NO eliminamos
+         * elementos de la caché. Podría ser un fallo temporal
+         * de permisos o del proveedor de documentos.
+         */
         if (folder == null
                 || !folder.isDirectory()) {
+
             return library;
         }
 
-        java.util.HashSet<String> knownUris =
-                new java.util.HashSet<>();
-
-        for (int i = 0; i < library.length(); i++) {
-
-            JSONObject item =
-                    library.optJSONObject(i);
-
-            if (item != null) {
-
-                String uri =
-                        item.optString(
-                                "uri",
-                                ""
-                        );
-
-                if (!uri.isEmpty()) {
-                    knownUris.add(uri);
-                }
-            }
-        }
-
-        boolean changed = false;
-
         DocumentFile[] files =
                 folder.listFiles();
+
+        if (files == null) {
+            return library;
+        }
+
+        /*
+         * Guardamos los archivos reales encontrados en la carpeta.
+         */
+        java.util.HashMap<String, DocumentFile> currentFiles =
+                new java.util.HashMap<>();
 
         for (DocumentFile file : files) {
 
@@ -13323,17 +17088,152 @@ private JSONArray scanOfflineFolder() {
 
             if (!lowerName.endsWith(".mp3") &&
                     !lowerName.endsWith(".opus")) {
+
                 continue;
             }
 
             String uri =
                     file.getUri().toString();
 
+            if (!uri.isEmpty()) {
+                currentFiles.put(
+                        uri,
+                        file
+                );
+            }
+        }
+
+        /*
+         * Si la carpeta existe pero no contiene ningún archivo
+         * compatible, es un estado válido. En ese caso la caché
+         * debe reflejar que no hay canciones.
+         */
+        boolean changed = false;
+
+        /*
+         * Primero eliminamos de la caché las canciones que ya no
+         * existen físicamente en la carpeta.
+         */
+        JSONArray synchronizedLibrary =
+                new JSONArray();
+
+        for (int i = 0;
+                i < library.length();
+                i++) {
+
+            JSONObject item =
+                    library.optJSONObject(i);
+
+            if (item == null) {
+                changed = true;
+                continue;
+            }
+
+            String uri =
+                    item.optString(
+                            "uri",
+                            ""
+                    );
+
+            if (uri.isEmpty()) {
+                changed = true;
+                continue;
+            }
+
+            DocumentFile currentFile =
+                    currentFiles.get(uri);
+
+            if (currentFile == null) {
+
+                changed = true;
+                continue;
+            }
+
+            /*
+             * El archivo sigue existiendo.
+             *
+             * Actualizamos el tamaño si ha cambiado, pero no
+             * volvemos a analizar sus metadatos.
+             */
+            long currentSize =
+                    currentFile.length();
+
+            long cachedSize =
+                    item.optLong(
+                            "size",
+                            -1
+                    );
+
+            if (cachedSize != currentSize) {
+
+                item.put(
+                        "size",
+                        currentSize
+                );
+
+                changed = true;
+            }
+
+            synchronizedLibrary.put(item);
+        }
+
+        /*
+         * Ahora añadimos solamente los archivos nuevos.
+         *
+         * Los ya conocidos no vuelven a pasar por
+         * MediaMetadataRetriever.
+         */
+        java.util.HashSet<String> knownUris =
+                new java.util.HashSet<>();
+
+        for (int i = 0;
+                i < synchronizedLibrary.length();
+                i++) {
+
+            JSONObject item =
+                    synchronizedLibrary.optJSONObject(i);
+
+            if (item != null) {
+
+                String uri =
+                        item.optString(
+                                "uri",
+                                ""
+                        );
+
+                if (!uri.isEmpty()) {
+                    knownUris.add(uri);
+                }
+            }
+        }
+
+        for (java.util.Map.Entry<String, DocumentFile> entry :
+                currentFiles.entrySet()) {
+
+            String uri =
+                    entry.getKey();
+
+            DocumentFile file =
+                    entry.getValue();
+
             if (knownUris.contains(uri)) {
                 continue;
             }
 
-            String title = name;
+            String name =
+                    file.getName();
+
+            if (name == null) {
+                continue;
+            }
+
+            String lowerName =
+                    name.toLowerCase(
+                            java.util.Locale.ROOT
+                    );
+
+            String title =
+                    name;
 
             if (lowerName.endsWith(".mp3")) {
 
@@ -13401,10 +17301,8 @@ private JSONArray scanOfflineFolder() {
             );
 
             /*
-             * Reconstruir metadatos directamente desde el
-             * MP3/Opus. Esto permite recuperar la información
-             * después de reinstalar la APK, aunque se hayan
-             * perdido las SharedPreferences.
+             * Solo los archivos nuevos necesitan análisis de
+             * metadatos.
              */
             android.media.MediaMetadataRetriever retriever =
                     new android.media.MediaMetadataRetriever();
@@ -13499,12 +17397,15 @@ private JSONArray scanOfflineFolder() {
                 }
             }
 
-            library.put(item);
-
+            synchronizedLibrary.put(item);
             knownUris.add(uri);
             changed = true;
         }
 
+        /*
+         * Solo escribimos SharedPreferences cuando realmente
+         * ha cambiado la biblioteca.
+         */
         if (changed) {
 
             getSharedPreferences(
@@ -13514,10 +17415,14 @@ private JSONArray scanOfflineFolder() {
                     .edit()
                     .putString(
                             "offline_library",
-                            library.toString()
+                            synchronizedLibrary.toString()
                     )
                     .apply();
+
+            return synchronizedLibrary;
         }
+
+        return library;
 
     } catch (Exception e) {
 
@@ -13526,9 +17431,55 @@ private JSONArray scanOfflineFolder() {
                 "Error escaneando carpeta offline",
                 e
         );
-    }
 
-    return library;
+        /*
+         * Ante cualquier error conservamos la caché anterior.
+         */
+        return library;
+    }
+}
+
+private void refreshOfflineLibraryInBackground() {
+
+    new Thread(() -> {
+
+        try {
+
+            JSONArray before =
+                    loadOfflineLibrary();
+
+            String beforeJson =
+                    before.toString();
+
+            JSONArray after =
+                    scanOfflineFolder();
+
+            String afterJson =
+                    after.toString();
+
+            if (beforeJson.equals(afterJson)) {
+                return;
+            }
+
+            runOnUiThread(() -> {
+
+                if (!"offline".equals(currentScreen)) {
+                    return;
+                }
+
+                showOfflineLibrary();
+            });
+
+        } catch (Exception e) {
+
+            android.util.Log.e(
+                    "MusicDownloader",
+                    "Error actualizando caché offline en segundo plano",
+                    e
+            );
+        }
+
+    }).start();
 }
 
 private void playOfflineLibraryFromIndex(
@@ -14015,6 +17966,12 @@ private long getOfflineFileDuration(Uri uri) {
 
 private void showOfflineLibrary() {
 
+    if (!"offline".equals(currentScreen)) {
+        screenBeforeOffline = currentScreen;
+    }
+
+    currentScreen = "offline";
+
     if (offlineTabLayout == null ||
             offlineTabScroll == null) {
         return;
@@ -14112,14 +18069,22 @@ private void showOfflineLibrary() {
             chooseFolderParams
     );
 
+    /*
+     * Cargamos primero la caché persistente.
+     *
+     * La pantalla Offline no espera al escaneo físico
+     * de la carpeta para poder mostrarse.
+     */
     JSONArray library =
-            scanOfflineFolder();
+            loadOfflineLibrary();
 
     /*
-     * Indica si hemos actualizado alguna duración
-     * leyendo el archivo multimedia local.
+     * Comprobamos la carpeta en segundo plano.
+     *
+     * Si aparecen canciones nuevas o desaparecen canciones,
+     * la biblioteca se actualiza y la pantalla se reconstruye.
      */
-    boolean libraryChanged = false;
+    refreshOfflineLibraryInBackground();
 
     /*
      * BOTONES DE SELECCIÓN
@@ -14276,6 +18241,12 @@ private void showOfflineLibrary() {
                         return;
                     }
 
+                    Toast.makeText(
+                            this,
+                            "⏳ Preparando " + selectedLibrary.length() + " canciones...",
+                            Toast.LENGTH_SHORT
+                    ).show();
+
                     playOfflineLibrary(
                             selectedLibrary
                     );
@@ -14338,6 +18309,13 @@ private void showOfflineLibrary() {
                             ""
                     );
 
+            /*
+             * La caché se utiliza para pintar la biblioteca
+             * inmediatamente. La existencia física del archivo
+             * se comprueba posteriormente en segundo plano.
+             */
+            boolean exists = true;
+
             String songTitle =
                     item.optString(
                             "title",
@@ -14379,49 +18357,6 @@ private void showOfflineLibrary() {
 
             Uri uri =
                     Uri.parse(uriString);
-
-            boolean exists = false;
-
-            try {
-
-                DocumentFile file =
-                        DocumentFile.fromSingleUri(
-                                this,
-                                uri
-                        );
-
-                exists =
-                        file != null
-                                && file.exists();
-
-            } catch (Exception ignored) {
-            }
-
-            /*
-             * Las canciones antiguas pueden tener duration=0
-             * porque fueron guardadas sin ese dato.
-             *
-             * Si el archivo existe, obtenemos la duración real
-             * directamente del MP3 y la guardamos en la biblioteca.
-             */
-            if (exists && duration <= 0) {
-
-                long detectedDuration =
-                        getOfflineFileDuration(uri);
-
-                if (detectedDuration > 0) {
-
-                    duration =
-                            detectedDuration;
-
-                    item.put(
-                            "duration",
-                            duration
-                    );
-
-                    libraryChanged = true;
-                }
-            }
 
             LinearLayout card =
                     new LinearLayout(this);
@@ -14741,6 +18676,31 @@ private void showOfflineLibrary() {
                     deleteParams
             );
 
+            Button favorite =
+                    createFavoriteButtonFromOffline(
+                            item,
+                            videoId
+                    );
+
+            LinearLayout.LayoutParams favoriteParams =
+                    new LinearLayout.LayoutParams(
+                            0,
+                            dp(46),
+                            1f
+                    );
+
+            favoriteParams.setMargins(
+                    dp(6),
+                    0,
+                    0,
+                    0
+            );
+
+            buttons.addView(
+                    favorite,
+                    favoriteParams
+            );
+
             final String finalUri =
                     uriString;
 
@@ -14799,39 +18759,6 @@ private void showOfflineLibrary() {
         }
     }
 
-    /*
-     * Guardamos una sola vez las duraciones detectadas,
-     * evitando escribir las preferencias durante cada canción.
-     */
-    if (libraryChanged) {
-
-        try {
-
-            getSharedPreferences(
-                    "MusicDownloader",
-                    MODE_PRIVATE
-            )
-                    .edit()
-                    .putString(
-                            "offline_library",
-                            library.toString()
-                    )
-                    .apply();
-
-            Log.d(
-                    "MusicDownloader",
-                    "Duraciones offline actualizadas"
-            );
-
-        } catch (Exception e) {
-
-            Log.e(
-                    "MusicDownloader",
-                    "Error guardando duraciones offline",
-                    e
-            );
-        }
-    }
 }
 
 
@@ -14879,6 +18806,8 @@ private static class ActiveDownloadItem {
 }
 
 private void showDownloads() {
+
+    currentScreen = "downloads";
 
     if (downloadsTabLayout == null ||
             downloadsTabScroll == null) {
@@ -17882,6 +21811,694 @@ private void importSpotifyFile(Uri uri) {
         }
 
     }).start();
+}
+
+
+
+/*
+ * =============================================================
+ * COLA VISIBLE
+ * =============================================================
+ *
+ * Interfaz sobre la cola REAL de Media3.
+ *
+ * No genera canciones.
+ * No resuelve URLs.
+ * No cambia la lógica de reproducción.
+ *
+ * Las modificaciones se hacen directamente sobre MediaController
+ * y después se mantiene sincronizado QueueRepository.
+ */
+private void showQueueDialog() {
+
+    if (mediaController == null) {
+
+        Toast.makeText(
+                this,
+                "No hay reproductor disponible",
+                Toast.LENGTH_SHORT
+        ).show();
+
+        return;
+    }
+
+    final int currentIndex =
+            mediaController.getCurrentMediaItemIndex();
+
+    final int count =
+            mediaController.getMediaItemCount();
+
+    if (count <= 0 || currentIndex < 0) {
+
+        Toast.makeText(
+                this,
+                "La cola está vacía",
+                Toast.LENGTH_SHORT
+        ).show();
+
+        return;
+    }
+
+    /*
+     * CONTENEDOR PRINCIPAL
+     */
+
+    LinearLayout root =
+            new LinearLayout(this);
+
+    root.setOrientation(
+            LinearLayout.VERTICAL
+    );
+
+    root.setPadding(
+            dp(20),
+            dp(8),
+            dp(20),
+            dp(8)
+    );
+
+    /*
+     * CABECERA
+     */
+
+    LinearLayout header =
+            new LinearLayout(this);
+
+    header.setOrientation(
+            LinearLayout.HORIZONTAL
+    );
+
+    header.setGravity(
+            Gravity.CENTER_VERTICAL
+    );
+
+    TextView title =
+            new TextView(this);
+
+    title.setText(
+            "☰  Cola de reproducción"
+    );
+
+    title.setTextSize(
+            19
+    );
+
+    title.setTextColor(
+            Color.WHITE
+    );
+
+    title.setTypeface(
+            null,
+            android.graphics.Typeface.BOLD
+    );
+
+    title.setLayoutParams(
+            new LinearLayout.LayoutParams(
+                    0,
+                    -2,
+                    1
+            )
+    );
+
+    header.addView(
+            title
+    );
+
+    TextView total =
+            new TextView(this);
+
+    total.setText(
+            count + " canciones"
+    );
+
+    total.setTextSize(
+            11
+    );
+
+    total.setTextColor(
+            Color.LTGRAY
+    );
+
+    header.addView(
+            total
+    );
+
+    root.addView(
+            header,
+            new LinearLayout.LayoutParams(
+                    -1,
+                    dp(46)
+            )
+    );
+
+    /*
+     * CONTENEDOR SCROLL
+     */
+
+    android.widget.ScrollView scroll =
+            new android.widget.ScrollView(this);
+
+    LinearLayout list =
+            new LinearLayout(this);
+
+    list.setOrientation(
+            LinearLayout.VERTICAL
+    );
+
+    /*
+     * CANCIÓN ACTUAL
+     */
+
+    MediaItem currentItem =
+            mediaController.getMediaItemAt(
+                    currentIndex
+            );
+
+    LinearLayout currentRow =
+            new LinearLayout(this);
+
+    currentRow.setOrientation(
+            LinearLayout.HORIZONTAL
+    );
+
+    currentRow.setGravity(
+            Gravity.CENTER_VERTICAL
+    );
+
+    currentRow.setPadding(
+            dp(12),
+            dp(8),
+            dp(8),
+            dp(8)
+    );
+
+    currentRow.setBackground(
+            roundedBackground(
+                    Color.rgb(38, 38, 48),
+                    Color.rgb(82, 82, 96),
+                    dp(14)
+            )
+    );
+
+    TextView currentText =
+            new TextView(this);
+
+    currentText.setText(
+            "▶  "
+            + getQueueItemTitle(currentItem)
+    );
+
+    currentText.setTextSize(
+            14
+    );
+
+    currentText.setTextColor(
+            Color.WHITE
+    );
+
+    currentText.setTypeface(
+            null,
+            android.graphics.Typeface.BOLD
+    );
+
+    currentText.setSingleLine(
+            true
+    );
+
+    currentText.setEllipsize(
+            android.text.TextUtils.TruncateAt.END
+    );
+
+    currentText.setLayoutParams(
+            new LinearLayout.LayoutParams(
+                    0,
+                    -2,
+                    1
+            )
+    );
+
+    currentRow.addView(
+            currentText
+    );
+
+    list.addView(
+            currentRow,
+            new LinearLayout.LayoutParams(
+                    -1,
+                    dp(54)
+            )
+    );
+
+    /*
+     * SEPARADOR / TÍTULO DE SIGUIENTES
+     */
+
+    TextView nextTitle =
+            new TextView(this);
+
+    nextTitle.setText(
+            "SIGUIENTES"
+    );
+
+    nextTitle.setTextSize(
+            10
+    );
+
+    nextTitle.setTextColor(
+            Color.LTGRAY
+    );
+
+    nextTitle.setTypeface(
+            null,
+            android.graphics.Typeface.BOLD
+    );
+
+    nextTitle.setLetterSpacing(
+            0.08f
+    );
+
+    nextTitle.setPadding(
+            dp(4),
+            dp(16),
+            dp(4),
+            dp(8)
+    );
+
+    list.addView(
+            nextTitle
+    );
+
+    /*
+     * CANCIONES SIGUIENTES
+     */
+
+    for (
+            int i = currentIndex + 1;
+            i < count;
+            i++
+    ) {
+
+        final int itemIndex = i;
+
+        MediaItem item =
+                mediaController.getMediaItemAt(
+                        i
+                );
+
+        LinearLayout row =
+                new LinearLayout(this);
+
+        row.setOrientation(
+                LinearLayout.HORIZONTAL
+        );
+
+        row.setGravity(
+                Gravity.CENTER_VERTICAL
+        );
+
+        row.setPadding(
+                dp(12),
+                dp(5),
+                dp(6),
+                dp(5)
+        );
+
+        row.setBackground(
+                roundedBackground(
+                        Color.rgb(30, 30, 38),
+                        Color.rgb(62, 62, 74),
+                        dp(12)
+                )
+        );
+
+        TextView songText =
+                new TextView(this);
+
+        songText.setText(
+                getQueueItemTitle(item)
+        );
+
+        songText.setTextSize(
+                13
+        );
+
+        songText.setTextColor(
+                Color.WHITE
+        );
+
+        songText.setSingleLine(
+                true
+        );
+
+        songText.setEllipsize(
+                android.text.TextUtils.TruncateAt.END
+        );
+
+        songText.setLayoutParams(
+                new LinearLayout.LayoutParams(
+                        0,
+                        -2,
+                        1
+                )
+        );
+
+        row.addView(
+                songText
+        );
+
+        Button removeButton =
+                roundedButton();
+
+        removeButton.setText(
+                "✕"
+        );
+
+        removeButton.setTextSize(
+                12
+        );
+
+        removeButton.setMinWidth(
+                dp(40)
+        );
+
+        removeButton.setMinHeight(
+                dp(36)
+        );
+
+        removeButton.setPadding(
+                dp(5),
+                0,
+                dp(5),
+                0
+        );
+
+        removeButton.setOnClickListener(
+                v -> {
+
+                    if (mediaController == null) {
+                        return;
+                    }
+
+                    if (
+                            itemIndex >=
+                            mediaController.getMediaItemCount()
+                    ) {
+                        return;
+                    }
+
+                    mediaController.removeMediaItem(
+                            itemIndex
+                    );
+
+                    syncQueueRepositoryFromPlayer();
+
+                    Toast.makeText(
+                            this,
+                            "Canción eliminada de la cola",
+                            Toast.LENGTH_SHORT
+                    ).show();
+
+                    showQueueDialog();
+                }
+        );
+
+        row.addView(
+                removeButton,
+                new LinearLayout.LayoutParams(
+                        dp(42),
+                        dp(38)
+                )
+        );
+
+        LinearLayout.LayoutParams rowParams =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(52)
+                );
+
+        rowParams.setMargins(
+                0,
+                0,
+                0,
+                dp(6)
+        );
+
+        list.addView(
+                row,
+                rowParams
+        );
+    }
+
+    /*
+     * SI NO HAY SIGUIENTES
+     */
+
+    if (
+            currentIndex >= count - 1
+    ) {
+
+        TextView empty =
+                new TextView(this);
+
+        empty.setText(
+                "No hay canciones siguientes"
+        );
+
+        empty.setTextSize(
+                13
+        );
+
+        empty.setTextColor(
+                Color.LTGRAY
+        );
+
+        empty.setGravity(
+                Gravity.CENTER
+        );
+
+        empty.setPadding(
+                0,
+                dp(18),
+                0,
+                dp(18)
+        );
+
+        list.addView(
+                empty
+        );
+    }
+
+    scroll.addView(
+            list,
+            new android.widget.ScrollView.LayoutParams(
+                    -1,
+                    -2
+            )
+    );
+
+    root.addView(
+            scroll,
+            new LinearLayout.LayoutParams(
+                    -1,
+                    0,
+                    1
+            )
+    );
+
+    /*
+     * BOTÓN VACIAR COLA
+     *
+     * Mantiene la canción actual y elimina todas las siguientes.
+     */
+
+    Button clearButton =
+            roundedButton();
+
+    clearButton.setText(
+            "🗑  Vaciar cola"
+    );
+
+    clearButton.setTextSize(
+            13
+    );
+
+    clearButton.setMinHeight(
+            dp(44)
+    );
+
+    clearButton.setOnClickListener(
+            v -> {
+
+                if (mediaController == null) {
+                    return;
+                }
+
+                int current =
+                        mediaController
+                                .getCurrentMediaItemIndex();
+
+                int totalItems =
+                        mediaController
+                                .getMediaItemCount();
+
+                if (
+                        current < 0 ||
+                        totalItems <= current + 1
+                ) {
+
+                    Toast.makeText(
+                            this,
+                            "No hay canciones pendientes",
+                            Toast.LENGTH_SHORT
+                    ).show();
+
+                    return;
+                }
+
+                /*
+                 * Se eliminan de atrás hacia delante para
+                 * que los índices no cambien durante el proceso.
+                 */
+                for (
+                        int i = totalItems - 1;
+                        i > current;
+                        i--
+                ) {
+
+                    mediaController.removeMediaItem(
+                            i
+                    );
+                }
+
+                syncQueueRepositoryFromPlayer();
+
+                Toast.makeText(
+                        this,
+                        "Cola vaciada",
+                        Toast.LENGTH_SHORT
+                ).show();
+
+                showQueueDialog();
+            }
+    );
+
+    LinearLayout.LayoutParams clearParams =
+            new LinearLayout.LayoutParams(
+                    -1,
+                    dp(44)
+            );
+
+    clearParams.setMargins(
+            0,
+            dp(10),
+            0,
+            dp(4)
+    );
+
+    root.addView(
+            clearButton,
+            clearParams
+    );
+
+    /*
+     * DIÁLOGO
+     */
+
+    android.app.AlertDialog dialog =
+            new android.app.AlertDialog.Builder(
+                    this
+            )
+            .setView(root)
+            .setNegativeButton(
+                    "Cerrar",
+                    null
+            )
+            .create();
+
+    dialog.show();
+}
+
+
+/*
+ * Obtiene un nombre legible de un MediaItem.
+ */
+private String getQueueItemTitle(
+        MediaItem item) {
+
+    if (item == null) {
+        return "Canción";
+    }
+
+    if (
+            item.mediaMetadata != null &&
+            item.mediaMetadata.title != null
+    ) {
+
+        String title =
+                item.mediaMetadata.title.toString();
+
+        if (!title.trim().isEmpty()) {
+            return title;
+        }
+    }
+
+    if (
+            item.mediaMetadata != null &&
+            item.mediaMetadata.artist != null
+    ) {
+
+        String artist =
+                item.mediaMetadata.artist.toString();
+
+        if (!artist.trim().isEmpty()) {
+            return artist;
+        }
+    }
+
+    if (
+            item.mediaId != null &&
+            !item.mediaId.trim().isEmpty()
+    ) {
+
+        return item.mediaId;
+    }
+
+    return "Canción";
+}
+
+
+/*
+ * Mantiene QueueRepository sincronizado con la cola
+ * que realmente tiene Media3.
+ *
+ * No genera ni modifica la lógica de reproducción.
+ */
+private void syncQueueRepositoryFromPlayer() {
+
+    if (mediaController == null) {
+        return;
+    }
+
+    java.util.ArrayList<MediaItem> items =
+            new java.util.ArrayList<>();
+
+    int count =
+            mediaController.getMediaItemCount();
+
+    for (
+            int i = 0;
+            i < count;
+            i++
+    ) {
+
+        items.add(
+                mediaController.getMediaItemAt(i)
+        );
+    }
+
+    QueueRepository.setQueue(
+            items
+    );
 }
 
 
