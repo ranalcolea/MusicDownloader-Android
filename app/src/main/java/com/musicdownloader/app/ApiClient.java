@@ -612,7 +612,8 @@ public class ApiClient {
                 null,
                 null,
                 0,
-                0
+                0,
+                "mp3"
         );
     }
 
@@ -624,24 +625,62 @@ public class ApiClient {
             int albumTrackIndex,
             int albumTrackTotal) throws Exception {
 
+        return downloadMobile(
+                videoId,
+                title,
+                albumGroup,
+                albumTitle,
+                albumTrackIndex,
+                albumTrackTotal,
+                "mp3"
+        );
+    }
+
+    public JSONObject downloadMobile(
+            String videoId,
+            String title,
+            String albumGroup,
+            String albumTitle,
+            int albumTrackIndex,
+            int albumTrackTotal,
+            String format) throws Exception {
+
         JSONObject body =
                 new JSONObject();
 
-        body.put("id", videoId);
+        body.put(
+                "id",
+                videoId
+        );
 
         if (title != null && !title.isEmpty()) {
-            body.put("title", title);
+
+            body.put(
+                    "title",
+                    title
+            );
         }
 
-        if (albumGroup != null && !albumGroup.isEmpty()) {
-            body.put("album_group", albumGroup);
+        if (albumGroup != null &&
+                !albumGroup.isEmpty()) {
+
+            body.put(
+                    "album_group",
+                    albumGroup
+            );
         }
 
-        if (albumTitle != null && !albumTitle.isEmpty()) {
-            body.put("album_title", albumTitle);
+        if (albumTitle != null &&
+                !albumTitle.isEmpty()) {
+
+            body.put(
+                    "album_title",
+                    albumTitle
+            );
         }
 
         if (albumTrackIndex > 0) {
+
             body.put(
                     "album_track_index",
                     albumTrackIndex
@@ -649,11 +688,23 @@ public class ApiClient {
         }
 
         if (albumTrackTotal > 0) {
+
             body.put(
                     "album_track_total",
                     albumTrackTotal
             );
         }
+
+        if (!"opus".equalsIgnoreCase(format)) {
+            format = "mp3";
+        } else {
+            format = "opus";
+        }
+
+        body.put(
+                "format",
+                format
+        );
 
         String response =
                 post(
@@ -663,7 +714,6 @@ public class ApiClient {
 
         return new JSONObject(response);
     }
-
 
     public String getMobileDownloadUrl(
             String job) {

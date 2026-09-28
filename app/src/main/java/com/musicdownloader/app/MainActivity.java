@@ -10272,14 +10272,53 @@ Toast.makeText(
                     );
                 }
 
+                String format =
+                        data.optString(
+                                "format",
+                                ""
+                        );
+
                 String filename =
                         data.optString(
                                 "filename",
                                 ""
                         );
 
+                if (
+                        !"opus".equalsIgnoreCase(format) &&
+                        !"mp3".equalsIgnoreCase(format)
+                ) {
+
+                    if (
+                            filename
+                                    .toLowerCase()
+                                    .endsWith(".opus")
+                    ) {
+                        format = "opus";
+                    } else {
+                        format = "mp3";
+                    }
+
+                } else {
+
+                    format =
+                            "opus".equalsIgnoreCase(format)
+                                    ? "opus"
+                                    : "mp3";
+                }
+
+                final String extension =
+                        "opus".equals(format)
+                                ? ".opus"
+                                : ".mp3";
+
+                final String mimeType =
+                        "opus".equals(format)
+                                ? "audio/ogg"
+                                : "audio/mpeg";
+
                 if (filename.isEmpty()) {
-                    filename = slot.title + ".mp3";
+                    filename = slot.title + extension;
                 }
 
                 filename =
@@ -10294,8 +10333,30 @@ Toast.makeText(
                                 )
                                 .trim();
 
-                if (!filename.toLowerCase().endsWith(".mp3")) {
-                    filename += ".mp3";
+                String lowerFilename =
+                        filename.toLowerCase();
+
+                if (
+                        lowerFilename.endsWith(".mp3") ||
+                        lowerFilename.endsWith(".opus")
+                ) {
+
+                    int dot =
+                            filename.lastIndexOf(".");
+
+                    if (dot >= 0) {
+
+                        filename =
+                                filename.substring(
+                                        0,
+                                        dot
+                                )
+                                + extension;
+                    }
+
+                } else {
+
+                    filename += extension;
                 }
 
                 String finalFilename = filename;
@@ -10310,7 +10371,8 @@ Toast.makeText(
                     String base =
                             finalFilename.substring(
                                     0,
-                                    finalFilename.length() - 4
+                                    finalFilename.length()
+                                            - extension.length()
                             );
 
                     int counter = 2;
@@ -10321,7 +10383,8 @@ Toast.makeText(
                                 base
                                         + " ("
                                         + counter
-                                        + ").mp3";
+                                        + ")"
+                                        + extension;
 
                         target =
                                 folder.findFile(
@@ -10343,9 +10406,19 @@ Toast.makeText(
                                 + " ms"
                 );
 
+                Log.d(
+                        "MUSIC_DOWNLOAD_DEBUG",
+                        "FORMATO OFFLINE: "
+                                + format
+                                + " mime="
+                                + mimeType
+                                + " filename="
+                                + finalFilename
+                );
+
                 target =
                         folder.createFile(
-                                "audio/mpeg",
+                                mimeType,
                                 finalFilename
                         );
 
@@ -10400,7 +10473,7 @@ Toast.makeText(
 
                 connection.setRequestProperty(
                         "Accept",
-                        "audio/mpeg"
+                        mimeType
                 );
 
                 connection.setRequestProperty(
@@ -10724,6 +10797,44 @@ Toast.makeText(
         });
     }
 
+    private String getOfflineFormat() {
+
+        String format =
+                getSharedPreferences(
+                        "settings",
+                        MODE_PRIVATE
+                ).getString(
+                        "offline_format",
+                        "mp3"
+                );
+
+        if ("opus".equalsIgnoreCase(format)) {
+            return "opus";
+        }
+
+        return "mp3";
+    }
+
+    private void saveOfflineFormat(
+            String format) {
+
+        if ("opus".equalsIgnoreCase(format)) {
+            format = "opus";
+        } else {
+            format = "mp3";
+        }
+
+        getSharedPreferences(
+                "settings",
+                MODE_PRIVATE
+        ).edit()
+                .putString(
+                        "offline_format",
+                        format
+                )
+                .apply();
+    }
+
     private void startMobileDownload(
             DownloadSlot slot) {
 
@@ -10772,6 +10883,10 @@ Toast.makeText(
 
         slot.progress.setProgress(0);
 
+        final String offlineFormat =
+                getOfflineFormat();
+
+
         executor.execute(() -> {
 
             try {
@@ -10793,21 +10908,27 @@ Toast.makeText(
 
                     result =
                             api().downloadMobile(
-                                    slot.videoId,
-                                    slot.title,
-                                    slot.albumGroup,
-                                    slot.albumTitle,
-                                    slot.albumTrackIndex,
-                                    slot.albumTrackTotal
-                            );
+                                slot.videoId,
+                                slot.title,
+                                slot.albumGroup,
+                                slot.albumTitle,
+                                slot.albumTrackIndex,
+                                slot.albumTrackTotal,
+                                offlineFormat
+                        );
 
                 } else {
 
                     result =
                             api().downloadMobile(
-                                    slot.videoId,
-                                    slot.title
-                            );
+                                slot.videoId,
+                                slot.title,
+                                null,
+                                null,
+                                0,
+                                0,
+                                offlineFormat
+                        );
                 }
 
                 Log.d(
@@ -13981,6 +14102,296 @@ private void showDownloads() {
     downloadsTabLayout.addView(
             title
     );
+
+    // =========================================================
+    // SELECTOR DE FORMATO OFFLINE
+    // =========================================================
+
+    final String[] offlineFormat =
+            {getOfflineFormat()};
+
+    LinearLayout formatCard =
+            new LinearLayout(this);
+
+    formatCard.setOrientation(
+            LinearLayout.VERTICAL
+    );
+
+    formatCard.setPadding(
+            dp(16),
+            dp(14),
+            dp(16),
+            dp(14)
+    );
+
+    android.graphics.drawable.GradientDrawable cardBackground =
+            new android.graphics.drawable.GradientDrawable();
+
+    cardBackground.setColor(
+            Color.rgb(30, 30, 34)
+    );
+
+    cardBackground.setCornerRadius(
+            dp(18)
+    );
+
+    formatCard.setBackground(
+            cardBackground
+    );
+
+    if (android.os.Build.VERSION.SDK_INT >= 21) {
+        formatCard.setElevation(
+                dp(5)
+        );
+    }
+
+    LinearLayout.LayoutParams cardParams =
+            new LinearLayout.LayoutParams(
+                    -1,
+                    -2
+            );
+
+    cardParams.setMargins(
+            dp(10),
+            dp(4),
+            dp(10),
+            dp(12)
+    );
+
+    downloadsTabLayout.addView(
+            formatCard,
+            cardParams
+    );
+
+    TextView formatTitle =
+            new TextView(this);
+
+    formatTitle.setText(
+            "🎧 Formato de descarga Offline (móvil)"
+    );
+
+    formatTitle.setTextSize(17);
+    formatTitle.setTextColor(
+            Color.WHITE
+    );
+
+    formatTitle.setTypeface(
+            null,
+            android.graphics.Typeface.BOLD
+    );
+
+    formatCard.addView(
+            formatTitle
+    );
+
+    TextView formatSubtitle =
+            new TextView(this);
+
+    formatSubtitle.setText(
+            "Se aplicará a Canciones, Álbumes y Spotify. Navidrome seguirá usando MP3."
+    );
+
+    formatSubtitle.setTextSize(13);
+    formatSubtitle.setTextColor(
+            Color.rgb(175, 175, 180)
+    );
+
+    formatSubtitle.setPadding(
+            0,
+            dp(4),
+            0,
+            dp(12)
+    );
+
+    formatCard.addView(
+            formatSubtitle
+    );
+
+    LinearLayout formatButtons =
+            new LinearLayout(this);
+
+    formatButtons.setOrientation(
+            LinearLayout.HORIZONTAL
+    );
+
+    formatButtons.setGravity(
+            android.view.Gravity.CENTER
+    );
+
+    formatCard.addView(
+            formatButtons,
+            new LinearLayout.LayoutParams(
+                    -1,
+                    -2
+            )
+    );
+
+    Button mp3Button =
+            new Button(this);
+
+    mp3Button.setTextSize(14);
+    mp3Button.setAllCaps(false);
+    mp3Button.setTextColor(
+            Color.WHITE
+    );
+
+    mp3Button.setStateListAnimator(null);
+
+    if (android.os.Build.VERSION.SDK_INT >= 21) {
+        mp3Button.setElevation(
+                dp(3)
+        );
+    }
+
+    LinearLayout.LayoutParams formatButtonParams =
+            new LinearLayout.LayoutParams(
+                    0,
+                    dp(50),
+                    1f
+            );
+
+    formatButtonParams.setMargins(
+            0,
+            0,
+            dp(6),
+            0
+    );
+
+    formatButtons.addView(
+            mp3Button,
+            formatButtonParams
+    );
+
+    Button opusButton =
+            new Button(this);
+
+    opusButton.setTextSize(14);
+    opusButton.setAllCaps(false);
+    opusButton.setTextColor(
+            Color.WHITE
+    );
+
+    opusButton.setStateListAnimator(null);
+
+    if (android.os.Build.VERSION.SDK_INT >= 21) {
+        opusButton.setElevation(
+                dp(3)
+        );
+    }
+
+    LinearLayout.LayoutParams opusButtonParams =
+            new LinearLayout.LayoutParams(
+                    0,
+                    dp(50),
+                    1f
+            );
+
+    opusButtonParams.setMargins(
+            dp(6),
+            0,
+            0,
+            0
+    );
+
+    formatButtons.addView(
+            opusButton,
+            opusButtonParams
+    );
+
+    Runnable refreshFormatButtons =
+            () -> {
+
+                boolean opusSelected =
+                        "opus".equals(
+                                offlineFormat[0]
+                        );
+
+                mp3Button.setText(
+                        opusSelected
+                                ? "🎵 MP3"
+                                : "✓  🎵 MP3"
+                );
+
+                opusButton.setText(
+                        opusSelected
+                                ? "✓  ⚡ Opus"
+                                : "⚡ Opus"
+                );
+
+                mp3Button.setAlpha(
+                        opusSelected
+                                ? 0.55f
+                                : 1.0f
+                );
+
+                opusButton.setAlpha(
+                        opusSelected
+                                ? 1.0f
+                                : 0.55f
+                );
+
+                android.graphics.drawable.GradientDrawable mp3Background =
+                        new android.graphics.drawable.GradientDrawable();
+
+                mp3Background.setColor(
+                        opusSelected
+                                ? Color.rgb(45, 45, 50)
+                                : Color.rgb(65, 65, 72)
+                );
+
+                mp3Background.setCornerRadius(
+                        dp(14)
+                );
+
+                mp3Button.setBackground(
+                        mp3Background
+                );
+
+                android.graphics.drawable.GradientDrawable opusBackground =
+                        new android.graphics.drawable.GradientDrawable();
+
+                opusBackground.setColor(
+                        opusSelected
+                                ? Color.rgb(65, 65, 72)
+                                : Color.rgb(45, 45, 50)
+                );
+
+                opusBackground.setCornerRadius(
+                        dp(14)
+                );
+
+                opusButton.setBackground(
+                        opusBackground
+                );
+            };
+
+    mp3Button.setOnClickListener(
+            v -> {
+
+                offlineFormat[0] = "mp3";
+
+                saveOfflineFormat(
+                        "mp3"
+                );
+
+                refreshFormatButtons.run();
+            }
+    );
+
+    opusButton.setOnClickListener(
+            v -> {
+
+                offlineFormat[0] = "opus";
+
+                saveOfflineFormat(
+                        "opus"
+                );
+
+                refreshFormatButtons.run();
+            }
+    );
+
+    refreshFormatButtons.run();
 
     TextView activeTitle =
             new TextView(this);
