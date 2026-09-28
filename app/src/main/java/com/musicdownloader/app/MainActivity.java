@@ -99,8 +99,16 @@ public class MainActivity extends android.app.Activity {
      */
     private ScrollView mainTabScroll;
     private ScrollView spotifyTabScroll;
-    private ScrollView offlineTabScroll;
-    private ScrollView downloadsTabScroll;
+    private android.widget.FrameLayout offlineTabContainer;
+    private android.widget.FrameLayout downloadsTabScroll;
+
+    /*
+     * Favoritos tiene su propio contenedor.
+     * No comparte las Views de Música.
+     */
+    private android.widget.FrameLayout favoritesTabScroll;
+    private LinearLayout favoritesTabLayout;
+    private LinearLayout favoritesResultsLayout;
 
     private LinearLayout mainTabLayout;
 
@@ -576,6 +584,38 @@ private boolean playerMinimized = false;
         rootLayout =
                 new LinearLayout(this);
 
+        rootLayout.setOnApplyWindowInsetsListener(
+                (view, insets) -> {
+
+                    if (android.os.Build.VERSION.SDK_INT >=
+                            android.os.Build.VERSION_CODES.R) {
+
+                        android.graphics.Insets bars =
+                                insets.getInsets(
+                                        android.view.WindowInsets.Type.systemBars()
+                                );
+
+                        view.setPadding(
+                                dp(20),
+                                bars.top + dp(2),
+                                dp(20),
+                                dp(20)
+                        );
+
+                    } else {
+
+                        view.setPadding(
+                                dp(20),
+                                insets.getSystemWindowInsetTop() + dp(2),
+                                dp(20),
+                                dp(20)
+                        );
+                    }
+
+                    return insets;
+                }
+        );
+
         LinearLayout root =
                 rootLayout;
 
@@ -583,12 +623,7 @@ private boolean playerMinimized = false;
                 LinearLayout.VERTICAL
         );
 
-        root.setPadding(
-                20,
-                20,
-                20,
-                20
-        );
+
 
         TextView title =
                 new TextView(this);
@@ -1231,7 +1266,7 @@ private boolean playerMinimized = false;
         );
 
         searchInput.setCompoundDrawablePadding(
-                dp(10)
+                dp(1)
         );
 
         searchInput.setBackground(
@@ -1413,6 +1448,12 @@ private boolean playerMinimized = false;
         contentFrame =
                 new android.widget.FrameLayout(this);
 
+        contentFrame.setOnApplyWindowInsetsListener(
+                (view, insets) -> insets
+        );
+
+        contentFrame.requestApplyInsets();
+
         /*
          * =====================================================
          * CUATRO CONTENEDORES INDEPENDIENTES
@@ -1425,6 +1466,13 @@ private boolean playerMinimized = false;
 
         mainTabScroll =
                 new ScrollView(this);
+
+        mainTabScroll.setPadding(
+                0,
+                dp(10),
+                0,
+                dp(20)
+        );
 
         mainTabLayout =
                 new LinearLayout(this);
@@ -1440,6 +1488,21 @@ private boolean playerMinimized = false;
         spotifyTabScroll =
                 new ScrollView(this);
 
+        spotifyTabScroll.setFillViewport(true);
+
+        spotifyTabScroll.setVerticalScrollBarEnabled(false);
+
+        spotifyTabScroll.setOverScrollMode(
+                View.OVER_SCROLL_NEVER
+        );
+
+        spotifyTabScroll.setPadding(
+                0,
+                0,
+                0,
+                0
+        );
+
         spotifyTabLayout =
                 new LinearLayout(this);
 
@@ -1451,8 +1514,15 @@ private boolean playerMinimized = false;
                 spotifyTabLayout
         );
 
-        offlineTabScroll =
-                new ScrollView(this);
+        /*
+         * Offline utiliza un contenedor fijo.
+         *
+         * No existe ScrollView exterior.
+         * El único elemento desplazable será
+         * offlineResultsScroll.
+         */
+        offlineTabContainer =
+                new android.widget.FrameLayout(this);
 
         offlineTabLayout =
                 new LinearLayout(this);
@@ -1461,12 +1531,22 @@ private boolean playerMinimized = false;
                 LinearLayout.VERTICAL
         );
 
-        offlineTabScroll.addView(
-                offlineTabLayout
+        offlineTabContainer.addView(
+                offlineTabLayout,
+                new android.widget.FrameLayout.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                )
         );
 
+        /*
+         * Conexiones utiliza un contenedor fijo.
+         *
+         * El único elemento desplazable será
+         * downloadsResultsScroll.
+         */
         downloadsTabScroll =
-                new ScrollView(this);
+                new android.widget.FrameLayout(this);
 
         downloadsTabLayout =
                 new LinearLayout(this);
@@ -1475,8 +1555,43 @@ private boolean playerMinimized = false;
                 LinearLayout.VERTICAL
         );
 
+        downloadsTabLayout.setPadding(
+                0,
+                dp(10),
+                0,
+                dp(20)
+        );
+
         downloadsTabScroll.addView(
-                downloadsTabLayout
+                downloadsTabLayout,
+                new android.widget.FrameLayout.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                )
+        );
+
+        /*
+         * Favoritos utiliza su propio contenedor fijo.
+         *
+         * El desplazamiento queda reservado únicamente
+         * para la lista interna de resultados.
+         */
+        favoritesTabScroll =
+                new android.widget.FrameLayout(this);
+
+        favoritesTabLayout =
+                new LinearLayout(this);
+
+        favoritesTabLayout.setOrientation(
+                LinearLayout.VERTICAL
+        );
+
+        favoritesTabScroll.addView(
+                favoritesTabLayout,
+                new android.widget.FrameLayout.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                )
         );
 
         android.widget.FrameLayout.LayoutParams tabParams =
@@ -1500,7 +1615,7 @@ private boolean playerMinimized = false;
         );
 
         contentFrame.addView(
-                offlineTabScroll,
+                offlineTabContainer,
                 new android.widget.FrameLayout.LayoutParams(
                         tabParams
                 )
@@ -1513,15 +1628,26 @@ private boolean playerMinimized = false;
                 )
         );
 
+        contentFrame.addView(
+                favoritesTabScroll,
+                new android.widget.FrameLayout.LayoutParams(
+                        tabParams
+                )
+        );
+
         spotifyTabScroll.setVisibility(
                 android.view.View.GONE
         );
 
-        offlineTabScroll.setVisibility(
+        offlineTabContainer.setVisibility(
                 android.view.View.GONE
         );
 
         downloadsTabScroll.setVisibility(
+                android.view.View.GONE
+        );
+
+        favoritesTabScroll.setVisibility(
                 android.view.View.GONE
         );
 
@@ -2027,6 +2153,11 @@ private boolean playerMinimized = false;
                 17
         );
 
+        previousButton.setMinHeight(0);
+        previousButton.setMinimumHeight(0);
+        previousButton.setMinWidth(0);
+        previousButton.setMinimumWidth(0);
+
         previousButton.setOnClickListener(
                 v -> {
 
@@ -2055,6 +2186,11 @@ private boolean playerMinimized = false;
         playPauseButton.setTextSize(
                 19
         );
+
+        playPauseButton.setMinHeight(0);
+        playPauseButton.setMinimumHeight(0);
+        playPauseButton.setMinWidth(0);
+        playPauseButton.setMinimumWidth(0);
 
         playPauseButton.setOnClickListener(
                 v -> togglePlayback()
@@ -2088,6 +2224,11 @@ private boolean playerMinimized = false;
         nextButton.setTextSize(
                 17
         );
+
+        nextButton.setMinHeight(0);
+        nextButton.setMinimumHeight(0);
+        nextButton.setMinWidth(0);
+        nextButton.setMinimumWidth(0);
 
         nextButton.setOnClickListener(
                 v -> {
@@ -2123,6 +2264,11 @@ private boolean playerMinimized = false;
         queueButton.setTextSize(
                 12
         );
+
+        queueButton.setMinHeight(0);
+        queueButton.setMinimumHeight(0);
+        queueButton.setMinWidth(0);
+        queueButton.setMinimumWidth(0);
 
         queueButton.setMinHeight(
                 dp(42)
@@ -2356,7 +2502,7 @@ private boolean playerMinimized = false;
 
     private void switchContentTab(
             LinearLayout targetLayout,
-            ScrollView targetScroll,
+            android.view.View targetScroll,
             boolean home) {
 
         if (targetLayout != downloadsTabLayout) {
@@ -2385,9 +2531,9 @@ private boolean playerMinimized = false;
             );
         }
 
-        if (offlineTabScroll != null) {
-            offlineTabScroll.setVisibility(
-                    targetScroll == offlineTabScroll
+        if (offlineTabContainer != null) {
+            offlineTabContainer.setVisibility(
+                    targetScroll == offlineTabContainer
                             ? android.view.View.VISIBLE
                             : android.view.View.GONE
             );
@@ -2396,6 +2542,14 @@ private boolean playerMinimized = false;
         if (downloadsTabScroll != null) {
             downloadsTabScroll.setVisibility(
                     targetScroll == downloadsTabScroll
+                            ? android.view.View.VISIBLE
+                            : android.view.View.GONE
+            );
+        }
+
+        if (favoritesTabScroll != null) {
+            favoritesTabScroll.setVisibility(
+                    targetScroll == favoritesTabScroll
                             ? android.view.View.VISIBLE
                             : android.view.View.GONE
             );
@@ -2619,6 +2773,376 @@ private boolean playerMinimized = false;
         );
     }
 
+
+    /*
+     * ============================================================
+     * AÑADIR UNA CANCIÓN A LA COLA EXISTENTE
+     * ============================================================
+     */
+
+    private boolean isMediaItemAlreadyInQueue(
+            MediaItem candidate) {
+
+        if (candidate == null ||
+                candidate.localConfiguration == null ||
+                candidate.localConfiguration.uri == null) {
+            return false;
+        }
+
+        String candidateUri =
+                candidate.localConfiguration.uri.toString();
+
+        if (candidateUri == null ||
+                candidateUri.trim().isEmpty()) {
+            return false;
+        }
+
+        List<MediaItem> currentQueue =
+                QueueRepository.getQueue();
+
+        for (MediaItem existing : currentQueue) {
+
+            if (existing == null ||
+                    existing.localConfiguration == null ||
+                    existing.localConfiguration.uri == null) {
+                continue;
+            }
+
+            String existingUri =
+                    existing.localConfiguration.uri.toString();
+
+            if (candidateUri.equals(existingUri)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void appendSingleMediaItemToQueue(
+            MediaItem item) {
+
+        if (item == null) {
+            return;
+        }
+
+        if (mediaController == null) {
+
+            Toast.makeText(
+                    this,
+                    "Reproductor no conectado",
+                    Toast.LENGTH_SHORT
+            ).show();
+
+            return;
+        }
+
+        if (isMediaItemAlreadyInQueue(item)) {
+
+            Toast.makeText(
+                    this,
+                    "ℹ Ya está en la cola",
+                    Toast.LENGTH_SHORT
+            ).show();
+
+            return;
+        }
+
+        addItemsToPlayerQueue(
+                java.util.Collections.singletonList(item)
+        );
+
+        Toast.makeText(
+                this,
+                "✓ Añadida a la cola",
+                Toast.LENGTH_SHORT
+        ).show();
+    }
+
+    private void addSongToExistingQueue(
+            ApiClient.Song song) {
+
+        if (song == null ||
+                song.id == null ||
+                song.id.trim().isEmpty()) {
+            return;
+        }
+
+        final String videoId =
+                song.id.trim();
+
+        executor.execute(() -> {
+
+            try {
+
+                String url =
+                        getFavoritePreviewUrlWithRetry(
+                                videoId
+                        );
+
+                if (url == null ||
+                        url.trim().isEmpty()) {
+                    throw new Exception(
+                            "No se obtuvo URL de reproducción"
+                    );
+                }
+
+                MediaItem item =
+                        buildFavoriteMediaItem(
+                                url,
+                                song.title,
+                                song.artist == null ||
+                                song.artist.trim().isEmpty()
+                                        ? song.channel
+                                        : song.artist,
+                                song.album,
+                                song.thumbnail,
+                                videoId
+                        );
+
+                handler.post(
+                        () -> appendSingleMediaItemToQueue(
+                                item
+                        )
+                );
+
+            } catch (Exception e) {
+
+                handler.post(() ->
+                        Toast.makeText(
+                                this,
+                                "No se pudo añadir la canción a la cola",
+                                Toast.LENGTH_SHORT
+                        ).show()
+                );
+            }
+        });
+    }
+
+    private void addAlbumTrackToExistingQueue(
+            ApiClient.Album album,
+            ApiClient.Song track) {
+
+        if (track == null) {
+            return;
+        }
+
+        executor.execute(() -> {
+
+            try {
+
+                AlbumResolvedTrack resolvedResult =
+                        resolveAlbumTrackWithRetry(
+                                track.artist,
+                                track.title
+                        );
+
+                ApiClient.Song resolved =
+                        resolvedResult.resolved;
+
+                String url =
+                        resolvedResult.url;
+
+                String thumbnail =
+                        track.thumbnail;
+
+                if (thumbnail == null ||
+                        thumbnail.trim().isEmpty()) {
+                    thumbnail =
+                            resolved.thumbnail;
+                }
+
+                if ((thumbnail == null ||
+                        thumbnail.trim().isEmpty()) &&
+                        album != null &&
+                        album.id != null &&
+                        !album.id.trim().isEmpty()) {
+
+                    thumbnail =
+                            "https://coverartarchive.org/release-group/"
+                                    + album.id
+                                    + "/front";
+                }
+
+                MediaItem item =
+                        buildFavoriteMediaItem(
+                                url,
+                                track.title,
+                                track.artist,
+                                track.album,
+                                thumbnail,
+                                resolved.id
+                        );
+
+                final MediaItem finalItem =
+                        item;
+
+                handler.post(
+                        () -> appendSingleMediaItemToQueue(
+                                finalItem
+                        )
+                );
+
+            } catch (Exception e) {
+
+                handler.post(() ->
+                        Toast.makeText(
+                                this,
+                                "No se pudo añadir la pista del álbum a la cola",
+                                Toast.LENGTH_SHORT
+                        ).show()
+                );
+            }
+        });
+    }
+
+    private void addSpotifyTrackToExistingQueue(
+            ApiClient.SpotifyTrack track) {
+
+        if (track == null) {
+            return;
+        }
+
+        executor.execute(() -> {
+
+            try {
+
+                SpotifyResolvedTrack resolvedResult =
+                        resolveSpotifyTrackWithRetry(
+                                track.artist,
+                                track.title
+                        );
+
+                ApiClient.Song resolved =
+                        resolvedResult.resolved;
+
+                String url =
+                        resolvedResult.url;
+
+                String thumbnail =
+                        track.thumbnail;
+
+                if (thumbnail == null ||
+                        thumbnail.trim().isEmpty()) {
+                    thumbnail =
+                            resolved.thumbnail;
+                }
+
+                MediaItem item =
+                        buildFavoriteMediaItem(
+                                url,
+                                track.title,
+                                track.artist,
+                                track.album,
+                                thumbnail,
+                                resolved.id
+                        );
+
+                final MediaItem finalItem =
+                        item;
+
+                handler.post(
+                        () -> appendSingleMediaItemToQueue(
+                                finalItem
+                        )
+                );
+
+            } catch (Exception e) {
+
+                handler.post(() ->
+                        Toast.makeText(
+                                this,
+                                "No se pudo añadir Spotify a la cola",
+                                Toast.LENGTH_SHORT
+                        ).show()
+                );
+            }
+        });
+    }
+
+    private void addOfflineItemToExistingQueue(
+            JSONObject item) {
+
+        if (item == null) {
+            return;
+        }
+
+        try {
+
+            String uri =
+                    item.optString(
+                            "uri",
+                            ""
+                    ).trim();
+
+            if (uri.isEmpty()) {
+                return;
+            }
+
+            String title =
+                    item.optString(
+                            "title",
+                            ""
+                    );
+
+            String artist =
+                    item.optString(
+                            "artist",
+                            ""
+                    );
+
+            String album =
+                    item.optString(
+                            "album",
+                            ""
+                    );
+
+            String thumbnail =
+                    item.optString(
+                            "thumbnail",
+                            ""
+                    );
+
+            MediaMetadata.Builder metadata =
+                    new MediaMetadata.Builder()
+                            .setTitle(title);
+
+            if (!artist.isEmpty()) {
+                metadata.setArtist(artist);
+            }
+
+            if (!album.isEmpty()) {
+                metadata.setAlbumTitle(album);
+            }
+
+            if (!thumbnail.isEmpty()) {
+                metadata.setArtworkUri(
+                        Uri.parse(thumbnail)
+                );
+            }
+
+            MediaItem mediaItem =
+                    new MediaItem.Builder()
+                            .setUri(uri)
+                            .setMediaMetadata(
+                                    metadata.build()
+                            )
+                            .build();
+
+            appendSingleMediaItemToQueue(
+                    mediaItem
+            );
+
+        } catch (Exception e) {
+
+            Toast.makeText(
+                    this,
+                    "No se pudo añadir la canción offline a la cola",
+                    Toast.LENGTH_SHORT
+            ).show();
+        }
+    }
+
     private void addItemsToPlayerQueue(
             List<MediaItem> items) {
 
@@ -2724,41 +3248,39 @@ private void showFavorites() {
 
     currentScreen = "favorites";
 
-    if (mainTabLayout == null ||
-            mainTabScroll == null) {
+    if (favoritesTabLayout == null ||
+            favoritesTabScroll == null) {
         return;
-    }
-
-    /*
-     * Guardamos las Views actuales de Música antes de que
-     * Favoritos utilice temporalmente este mismo contenedor.
-     *
-     * Así no perdemos los resultados de búsqueda ni tenemos
-     * que volver a consultar el servidor.
-     */
-    if (!showingFavorites) {
-
-        savedMusicViews.clear();
-
-        savedMusicScrollY =
-                mainTabScroll.getScrollY();
-
-        for (int i = 0;
-                i < mainTabLayout.getChildCount();
-                i++) {
-
-            savedMusicViews.add(
-                    mainTabLayout.getChildAt(i)
-            );
-        }
     }
 
     showingFavorites = true;
 
+    /*
+     * Guardamos las Views actuales de Música
+     * para restaurarlas exactamente al volver.
+     */
+    savedMusicViews.clear();
+
+    for (int i = 0;
+            i < mainTabLayout.getChildCount();
+            i++) {
+
+        savedMusicViews.add(
+                mainTabLayout.getChildAt(i)
+        );
+    }
+
+    if (mainTabScroll != null) {
+        savedMusicScrollY =
+                mainTabScroll.getScrollY();
+    }
+
+    mainTabLayout.removeAllViews();
+
     switchContentTab(
-            mainTabLayout,
-            mainTabScroll,
-            true
+            favoritesTabLayout,
+            favoritesTabScroll,
+            false
     );
 
     if (searchCard != null) {
@@ -2767,10 +3289,17 @@ private void showFavorites() {
         );
     }
 
-    mainTabLayout.removeAllViews();
+    favoritesTabLayout.removeAllViews();
 
     favoritePreparationStatusViews.clear();
     favoriteSelectionChecks.clear();
+
+    favoritesResultsLayout =
+            new LinearLayout(this);
+
+    favoritesResultsLayout.setOrientation(
+            LinearLayout.VERTICAL
+    );
 
     LinearLayout header =
             new LinearLayout(this);
@@ -2831,7 +3360,7 @@ private void showFavorites() {
             )
     );
 
-    mainTabLayout.addView(
+    favoritesTabLayout.addView(
             header,
             new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
@@ -2866,7 +3395,7 @@ private void showFavorites() {
                 dp(40)
         );
 
-        mainTabLayout.addView(
+        favoritesTabLayout.addView(
                 empty,
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
@@ -2950,12 +3479,30 @@ private void showFavorites() {
             dp(8),
             0,
             dp(8),
-            dp(10)
+            dp(1)
     );
 
-    mainTabLayout.addView(
+    favoritesTabLayout.addView(
             selectionButtons,
             selectionParams
+    );
+
+    ScrollView resultsScroll =
+            new ScrollView(this);
+
+    resultsScroll.setFillViewport(true);
+
+    resultsScroll.addView(
+            favoritesResultsLayout
+    );
+
+    favoritesTabLayout.addView(
+            resultsScroll,
+            new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+            )
     );
 
     for (int i = 0;
@@ -3359,9 +3906,9 @@ private void addFavoriteSongView(
 
     card.setPadding(
             dp(12),
-            dp(10),
+            dp(1),
             dp(12),
-            dp(10)
+            dp(1)
     );
 
     LinearLayout top =
@@ -3619,13 +4166,13 @@ private void addFavoriteSongView(
             );
 
     cardParams.setMargins(
-            dp(10),
+            dp(1),
             dp(5),
-            dp(10),
+            dp(1),
             dp(5)
     );
 
-    mainTabLayout.addView(
+    favoritesResultsLayout.addView(
             card,
             cardParams
     );
@@ -3644,9 +4191,9 @@ private void addFavoriteAlbumView(
 
     card.setPadding(
             dp(12),
-            dp(10),
+            dp(1),
             dp(12),
-            dp(10)
+            dp(1)
     );
 
     LinearLayout top =
@@ -3842,13 +4389,13 @@ private void addFavoriteAlbumView(
             );
 
     cardParams.setMargins(
-            dp(10),
+            dp(1),
             dp(5),
-            dp(10),
+            dp(1),
             dp(5)
     );
 
-    mainTabLayout.addView(
+    favoritesResultsLayout.addView(
             card,
             cardParams
     );
@@ -6090,6 +6637,44 @@ private void saveServerUrl() {
         return drawable;
     }
 
+    private android.graphics.drawable.StateListDrawable button3DBackground(
+            int normalColor,
+            int pressedColor,
+            int strokeColor,
+            int radiusDp) {
+
+        android.graphics.drawable.GradientDrawable normal =
+                new android.graphics.drawable.GradientDrawable();
+
+        normal.setColor(normalColor);
+        normal.setCornerRadius(dp(radiusDp));
+        normal.setStroke(dp(1), strokeColor);
+
+        android.graphics.drawable.GradientDrawable pressed =
+                new android.graphics.drawable.GradientDrawable();
+
+        pressed.setColor(pressedColor);
+        pressed.setCornerRadius(dp(radiusDp));
+        pressed.setStroke(dp(1), strokeColor);
+
+        android.graphics.drawable.StateListDrawable states =
+                new android.graphics.drawable.StateListDrawable();
+
+        states.addState(
+                new int[] {
+                        android.R.attr.state_pressed
+                },
+                pressed
+        );
+
+        states.addState(
+                new int[] {},
+                normal
+        );
+
+        return states;
+    }
+
     private void addMainButton(
             LinearLayout parent,
             Button button) {
@@ -6137,9 +6722,10 @@ private void saveServerUrl() {
         button.setMinWidth(0);
 
         button.setBackground(
-                roundedBackground(
-                        Color.rgb(32, 32, 40),
-                        Color.rgb(82, 82, 98),
+                button3DBackground(
+                        Color.rgb(38, 38, 48),
+                        Color.rgb(25, 25, 33),
+                        Color.rgb(88, 88, 108),
                         18
                 )
         );
@@ -6176,14 +6762,15 @@ private void saveServerUrl() {
         button.setMinWidth(0);
 
         button.setBackground(
-                roundedBackground(
-                        Color.rgb(42, 42, 52),
-                        Color.rgb(96, 96, 116),
+                button3DBackground(
+                        Color.rgb(48, 48, 60),
+                        Color.rgb(31, 31, 41),
+                        Color.rgb(102, 102, 124),
                         17
                 )
         );
 
-        button.setElevation(dp(5));
+        button.setElevation(dp(6));
         button.setStateListAnimator(null);
 
         return button;
@@ -6846,9 +7433,9 @@ private void loadThumbnail(
 
             empty.setPadding(
                     dp(20),
-                    dp(30),
+                    dp(1),
                     dp(20),
-                    dp(30)
+                    dp(1)
             );
 
             contentLayout.addView(
@@ -7225,7 +7812,7 @@ private void loadThumbnail(
 
             buttonsParams.setMargins(
                     0,
-                    dp(10),
+                    dp(1),
                     0,
                     0
             );
@@ -7241,8 +7828,9 @@ private void loadThumbnail(
                     android.graphics.Typeface.BOLD
             );
             play.setBackground(
-                    roundedBackground(
+                    button3DBackground(
                             Color.rgb(70, 70, 88),
+                            Color.rgb(45, 45, 60),
                             Color.rgb(125, 125, 150),
                             18
                     )
@@ -7295,8 +7883,9 @@ private void loadThumbnail(
                     Color.rgb(225, 225, 235)
             );
             download.setBackground(
-                    roundedBackground(
+                    button3DBackground(
                             Color.rgb(38, 38, 48),
+                            Color.rgb(25, 25, 33),
                             Color.rgb(82, 82, 100),
                             18
                     )
@@ -7334,8 +7923,9 @@ private void loadThumbnail(
                     Color.rgb(225, 225, 235)
             );
             offline.setBackground(
-                    roundedBackground(
+                    button3DBackground(
                             Color.rgb(34, 40, 48),
+                            Color.rgb(22, 28, 36),
                             Color.rgb(78, 96, 112),
                             18
                     )
@@ -7363,6 +7953,49 @@ private void loadThumbnail(
                     offlineParams
             );
 
+            Button addQueue =
+                    visualButton(
+                            "＋ Cola"
+                    );
+
+            addQueue.setTextSize(12);
+            addQueue.setTextColor(
+                    Color.rgb(225, 225, 235)
+            );
+            addQueue.setBackground(
+                    roundedBackground(
+                            Color.rgb(42, 48, 58),
+                            Color.rgb(88, 108, 125),
+                            18
+                    )
+            );
+            addQueue.setElevation(
+                    dp(5)
+            );
+
+            LinearLayout.LayoutParams addQueueParams =
+                    new LinearLayout.LayoutParams(
+                            0,
+                            dp(42),
+                            0.85f
+                    );
+
+            addQueueParams.setMargins(
+                    dp(6),
+                    0,
+                    0,
+                    0
+            );
+
+            addQueue.setOnClickListener(
+                    v -> addSongToExistingQueue(song)
+            );
+
+            buttons.addView(
+                    addQueue,
+                    addQueueParams
+            );
+
             Button favorite =
                     createFavoriteButton(
                             song,
@@ -7373,7 +8006,7 @@ private void loadThumbnail(
                     new LinearLayout.LayoutParams(
                             0,
                             dp(44),
-                            0.35f
+                            0.65f
                     );
 
             favoriteParams.setMargins(
@@ -8343,10 +8976,10 @@ private void loadThumbnail(
             );
 
             card.setPadding(
-                    dp(10),
-                    dp(10),
-                    dp(10),
-                    dp(10)
+                    dp(1),
+                    dp(1),
+                    dp(1),
+                    dp(1)
             );
 
             card.setBackground(
@@ -8536,9 +9169,9 @@ private void loadThumbnail(
 
             empty.setPadding(
                     dp(20),
-                    dp(30),
+                    dp(1),
                     dp(20),
-                    dp(30)
+                    dp(1)
             );
 
             contentLayout.addView(empty);
@@ -8909,10 +9542,10 @@ private void loadThumbnail(
             );
 
             card.setPadding(
-                    dp(10),
-                    dp(10),
-                    dp(10),
-                    dp(10)
+                    dp(1),
+                    dp(1),
+                    dp(1),
+                    dp(1)
             );
 
             card.setBackground(
@@ -9151,6 +9784,53 @@ private void loadThumbnail(
             buttons.addView(
                     offline,
                     offlineParams
+            );
+
+            Button addQueue =
+                    visualButton(
+                            "＋ Cola"
+                    );
+
+            addQueue.setTextSize(12);
+            addQueue.setTextColor(
+                    Color.rgb(225, 225, 235)
+            );
+            addQueue.setBackground(
+                    button3DBackground(
+                            Color.rgb(42, 48, 58),
+                            Color.rgb(28, 34, 44),
+                            Color.rgb(88, 108, 125),
+                            18
+                    )
+            );
+            addQueue.setElevation(
+                    dp(5)
+            );
+
+            LinearLayout.LayoutParams addQueueParams =
+                    new LinearLayout.LayoutParams(
+                            0,
+                            dp(42),
+                            0.85f
+                    );
+
+            addQueueParams.setMargins(
+                    dp(6),
+                    0,
+                    0,
+                    0
+            );
+
+            addQueue.setOnClickListener(
+                    v -> addAlbumTrackToExistingQueue(
+                            album,
+                            track
+                    )
+            );
+
+            buttons.addView(
+                    addQueue,
+                    addQueueParams
             );
 
             Button favorite =
@@ -10671,9 +11351,9 @@ Toast.makeText(
 
         root.setPadding(
                 0,
+                dp(10),
                 0,
-                0,
-                0
+                dp(20)
         );
 
         // =========================================================
@@ -12240,7 +12920,7 @@ Toast.makeText(
 
         playlistCoverParams.setMargins(
                 0,
-                dp(10),
+                dp(1),
                 0,
                 dp(12)
         );
@@ -12837,6 +13517,37 @@ selectionButtons.addView(
             buttons.addView(
                     offline,
                     offlineParams
+            );
+
+            Button addQueue =
+                    spotifyModernButton(
+                            "＋ Cola",
+                            false
+                    );
+
+            LinearLayout.LayoutParams addQueueParams =
+                    new LinearLayout.LayoutParams(
+                            0,
+                            dp(40),
+                            0.85f
+                    );
+
+            addQueueParams.setMargins(
+                    dp(4),
+                    0,
+                    0,
+                    0
+            );
+
+            addQueue.setOnClickListener(
+                    v -> addSpotifyTrackToExistingQueue(
+                            track
+                    )
+            );
+
+            buttons.addView(
+                    addQueue,
+                    addQueueParams
             );
 
             Button favorite =
@@ -17973,13 +18684,13 @@ private void showOfflineLibrary() {
     currentScreen = "offline";
 
     if (offlineTabLayout == null ||
-            offlineTabScroll == null) {
+            offlineTabContainer == null) {
         return;
     }
 
     switchContentTab(
             offlineTabLayout,
-            offlineTabScroll,
+            offlineTabContainer,
             false
     );
 
@@ -17988,6 +18699,39 @@ private void showOfflineLibrary() {
      * inmediatamente cualquier alta o borrado de canciones offline.
      */
     offlineTabLayout.removeAllViews();
+
+    /*
+     * El contenedor raíz ocupa exactamente la zona visible.
+     * Conservamos el espaciado visual que tenía la pestaña.
+     */
+    /*
+     * Igual que Spotify:
+     *
+     * offlineTabLayout = contenedor de la pestaña
+     * root              = viewport exacto
+     * offlineResultsScroll = único scroll de resultados
+     */
+    final LinearLayout root =
+            new LinearLayout(this);
+
+    root.setOrientation(
+            LinearLayout.VERTICAL
+    );
+
+    root.setPadding(
+            0,
+            dp(10),
+            0,
+            dp(20)
+    );
+
+    /*
+     * Todo el contenido de Offline se construirá dentro
+     * de root. Así offlineTabLayout no crece con las
+     * canciones y el ScrollView exterior no tiene nada
+     * que desplazar.
+     */
+    contentLayout = root;
 
     /*
      * Reconstruimos también las casillas de selección.
@@ -18057,7 +18801,7 @@ private void showOfflineLibrary() {
             dp(8),
             0,
             dp(8),
-            dp(10)
+            dp(1)
     );
 
     chooseFolder.setOnClickListener(
@@ -18170,12 +18914,53 @@ private void showOfflineLibrary() {
             dp(8),
             0,
             dp(8),
-            dp(10)
+            dp(1)
     );
 
     contentLayout.addView(
             playAll,
             playAllParams
+    );
+
+    /*
+     * ============================================================
+     * RESULTADOS OFFLINE
+     * ============================================================
+     *
+     * La cabecera y los botones anteriores quedan fijos.
+     * Solamente este ScrollView contiene y desplaza las canciones.
+     */
+    ScrollView offlineResultsScroll =
+            new ScrollView(this);
+
+    offlineResultsScroll.setFillViewport(true);
+    offlineResultsScroll.setVerticalScrollBarEnabled(true);
+    offlineResultsScroll.setOverScrollMode(
+            View.OVER_SCROLL_IF_CONTENT_SCROLLS
+    );
+
+    LinearLayout offlineResultsContainer =
+            new LinearLayout(this);
+
+    offlineResultsContainer.setOrientation(
+            LinearLayout.VERTICAL
+    );
+
+    offlineResultsScroll.addView(
+            offlineResultsContainer,
+            new ScrollView.LayoutParams(
+                    -1,
+                    -2
+            )
+    );
+
+    contentLayout.addView(
+            offlineResultsScroll,
+            new LinearLayout.LayoutParams(
+                    -1,
+                    0,
+                    1f
+            )
     );
 
     /*
@@ -18291,7 +19076,7 @@ private void showOfflineLibrary() {
                 dp(20)
         );
 
-        contentLayout.addView(empty);
+        offlineResultsContainer.addView(empty);
 
         return;
     }
@@ -18397,7 +19182,7 @@ private void showOfflineLibrary() {
                     dp(6)
             );
 
-            contentLayout.addView(
+            offlineResultsContainer.addView(
                     card,
                     cardParams
             );
@@ -18617,7 +19402,7 @@ private void showOfflineLibrary() {
 
             buttonsParams.setMargins(
                     0,
-                    dp(10),
+                    dp(1),
                     0,
                     0
             );
@@ -18637,6 +19422,38 @@ private void showOfflineLibrary() {
             );
 
             play.setEnabled(exists);
+
+            Button addQueue =
+                    roundedButton();
+
+            addQueue.setText(
+                    "＋ Cola"
+            );
+
+            LinearLayout.LayoutParams addQueueParams =
+                    new LinearLayout.LayoutParams(
+                            0,
+                            dp(46),
+                            1f
+                    );
+
+            addQueueParams.setMargins(
+                    dp(6),
+                    0,
+                    dp(6),
+                    0
+            );
+
+            addQueue.setOnClickListener(
+                    v -> addOfflineItemToExistingQueue(
+                            item
+                    )
+            );
+
+            buttons.addView(
+                    addQueue,
+                    addQueueParams
+            );
 
             Button delete =
                     roundedButton();
@@ -18759,6 +19576,22 @@ private void showOfflineLibrary() {
         }
     }
 
+    /*
+     * Añadimos el root completo al contenedor de la pestaña,
+     * exactamente como hace Spotify.
+     *
+     * offlineTabLayout queda con un único hijo del tamaño
+     * del viewport. El ScrollView exterior no contiene
+     * directamente las canciones.
+     */
+    offlineTabLayout.addView(
+            root,
+            new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.MATCH_PARENT
+            )
+    );
+
 }
 
 
@@ -18866,10 +19699,10 @@ private void showDownloads() {
     );
 
     title.setPadding(
-            dp(10),
+            dp(1),
             dp(14),
-            dp(10),
-            dp(10)
+            dp(1),
+            dp(1)
     );
 
     downloadsTabLayout.addView(
@@ -18925,9 +19758,9 @@ private void showDownloads() {
             );
 
     cardParams.setMargins(
-            dp(10),
+            dp(1),
             dp(4),
-            dp(10),
+            dp(1),
             dp(12)
     );
 
@@ -19166,6 +19999,42 @@ private void showDownloads() {
 
     refreshFormatButtons.run();
 
+    /*
+     * Desde aquí comienza únicamente el contenido desplazable.
+     */
+    final ScrollView downloadsResultsScroll =
+            new ScrollView(this);
+
+    downloadsResultsScroll.setFillViewport(true);
+    downloadsResultsScroll.setVerticalScrollBarEnabled(true);
+    downloadsResultsScroll.setOverScrollMode(
+            View.OVER_SCROLL_IF_CONTENT_SCROLLS
+    );
+
+    LinearLayout downloadsResultsContainer =
+            new LinearLayout(this);
+
+    downloadsResultsContainer.setOrientation(
+            LinearLayout.VERTICAL
+    );
+
+    downloadsResultsScroll.addView(
+            downloadsResultsContainer,
+            new ScrollView.LayoutParams(
+                    -1,
+                    -2
+            )
+    );
+
+    downloadsTabLayout.addView(
+            downloadsResultsScroll,
+            new LinearLayout.LayoutParams(
+                    -1,
+                    0,
+                    1f
+            )
+    );
+
     TextView activeTitle =
             new TextView(this);
 
@@ -19184,13 +20053,13 @@ private void showDownloads() {
     );
 
     activeTitle.setPadding(
-            dp(10),
+            dp(1),
             dp(8),
-            dp(10),
+            dp(1),
             dp(6)
     );
 
-    downloadsTabLayout.addView(
+    downloadsResultsContainer.addView(
             activeTitle
     );
 
@@ -19201,7 +20070,7 @@ private void showDownloads() {
             LinearLayout.VERTICAL
     );
 
-    downloadsTabLayout.addView(
+    downloadsResultsContainer.addView(
             downloadsActiveList,
             new LinearLayout.LayoutParams(
                     -1,
@@ -19234,13 +20103,13 @@ private void showDownloads() {
     );
 
     historyTitle.setPadding(
-            dp(10),
+            dp(1),
             dp(16),
-            dp(10),
+            dp(1),
             dp(6)
     );
 
-    downloadsTabLayout.addView(
+    downloadsResultsContainer.addView(
             historyTitle
     );
 
@@ -19251,7 +20120,7 @@ private void showDownloads() {
             LinearLayout.HORIZONTAL
     );
 
-    downloadsTabLayout.addView(
+    downloadsResultsContainer.addView(
             actions,
             new LinearLayout.LayoutParams(
                     -1,
@@ -19301,7 +20170,7 @@ private void showDownloads() {
             )
     );
 
-    downloadsTabLayout.addView(
+    downloadsResultsContainer.addView(
             historyList,
             new LinearLayout.LayoutParams(
                     -1,
@@ -19328,15 +20197,14 @@ private void showDownloads() {
     );
 
     info.setPadding(
-            dp(10),
-            dp(10),
-            dp(10),
+            dp(1),
+            dp(1),
+            dp(1),
             dp(12)
     );
 
-    downloadsTabLayout.addView(
-            info,
-            2
+    downloadsResultsContainer.addView(
+            info
     );
 
     Runnable loadDownloads =
@@ -22390,7 +23258,7 @@ private void showQueueDialog() {
 
     clearParams.setMargins(
             0,
-            dp(10),
+            dp(1),
             0,
             dp(4)
     );
