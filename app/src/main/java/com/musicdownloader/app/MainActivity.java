@@ -5365,6 +5365,12 @@ private void addFavoriteSongView(
             v -> playSingleFavorite(item)
     );
 
+    // FAVORITOS_ANADIR_A_COLA_V1
+    Button addQueue = visualButton("＋ A la cola");
+    addQueue.setTextSize(12);
+    addQueue.setAllCaps(false);
+    addQueue.setOnClickListener(v -> addFavoriteToExistingQueue(item));
+
     Button remove =
             visualButton(
                     "★  Quitar"
@@ -5405,6 +5411,11 @@ private void addFavoriteSongView(
                     1f
             )
     );
+
+    LinearLayout.LayoutParams queueParams =
+            new LinearLayout.LayoutParams(0, dp(44), 1f);
+    queueParams.setMargins(dp(5), 0, 0, 0);
+    buttons.addView(addQueue, queueParams);
 
     LinearLayout.LayoutParams removeParams =
             new LinearLayout.LayoutParams(
@@ -5627,6 +5638,12 @@ private void addFavoriteAlbumView(
             v -> playSingleFavorite(item)
     );
 
+    // FAVORITOS_ANADIR_A_COLA_V1
+    Button addQueue = visualButton("＋ A la cola");
+    addQueue.setTextSize(12);
+    addQueue.setAllCaps(false);
+    addQueue.setOnClickListener(v -> addFavoriteToExistingQueue(item));
+
     Button remove =
             visualButton(
                     "★"
@@ -5668,6 +5685,11 @@ private void addFavoriteAlbumView(
                     1f
             )
     );
+
+    LinearLayout.LayoutParams queueParams =
+            new LinearLayout.LayoutParams(0, dp(44), 1f);
+    queueParams.setMargins(dp(5), 0, 0, 0);
+    buttons.addView(addQueue, queueParams);
 
     LinearLayout.LayoutParams removeParams =
             new LinearLayout.LayoutParams(
@@ -5723,6 +5745,95 @@ private void addFavoriteAlbumView(
             card,
             cardParams
     );
+}
+
+
+// FAVORITOS_ANADIR_A_COLA_V1
+// Se reutiliza el constructor de MediaItem (portada + duración) y
+// addItemsToPlayerQueue(), sin reemplazar ni reiniciar la cola actual.
+private void addFavoriteToExistingQueue(JSONObject favorite) {
+    if (favorite == null) return;
+    if (mediaController == null) {
+        Toast.makeText(this, "Reproductor no conectado", Toast.LENGTH_SHORT).show();
+        return;
+    }
+    Toast.makeText(this, "Preparando para añadir a la cola...", Toast.LENGTH_SHORT).show();
+    executor.execute(() -> {
+        try {
+            ArrayList<MediaItem> ready = new ArrayList<>();
+            String type = favorite.optString("type", "");
+            String fallbackCover = favorite.optString("thumbnail", "");
+            String localCover = favorite.optString("thumbnailLocal", "");
+            if (!localCover.isEmpty()) {
+                java.io.File cf = new java.io.File(localCover);
+                if (cf.isFile()) fallbackCover = Uri.fromFile(cf).toString();
+            }
+            if ("album".equals(type)) {
+                String albumId = favorite.optString("albumId", "").trim();
+                if (albumId.isEmpty()) throw new Exception("Falta ID del álbum");
+                ApiClient.Album album = getFavoriteAlbumWithRetry(albumId);
+                if (album == null || album.tracks == null || album.tracks.isEmpty())
+                    throw new Exception("Álbum sin pistas");
+                // Preparación secuencial, igual que el método estable de Favoritos.
+                for (ApiClient.Song track : album.tracks) {
+                    if (track == null) continue;
+                    try {
+                        AlbumResolvedTrack resolved = resolveAlbumTrackWithRetry(
+                                track.artist, track.title, track.album, track.albumType);
+                        String cover = track.thumbnail == null || track.thumbnail.trim().isEmpty()
+                                ? fallbackCover : track.thumbnail;
+                        ready.add(buildFavoriteMediaItem(resolved.url,
+                                track.title, track.artist, track.album, cover,
+                                resolved.resolved.id, track.duration));
+                    } catch (Exception err) {
+                        android.util.Log.w("FavoritesQueue", "Pista no preparada: " + track.title, err);
+                    }
+                }
+            } else {
+                String uri = favorite.optString("uri", "").trim();
+                String videoId = favorite.optString("videoId", "").trim();
+                String spotifyId = favorite.optString("spotifyId", "").trim();
+                String key = favorite.optString("key", "");
+                if (videoId.isEmpty() && key.startsWith("song:") &&
+                        key.substring(5).matches("[A-Za-z0-9_-]{11}")) videoId = key.substring(5);
+                String title = favorite.optString("title", "Canción");
+                String artist = favorite.optString("artist", "");
+                String album = favorite.optString("album", "");
+                long duration = favorite.optLong("duration", 0L);
+                String url;
+                if (!uri.isEmpty()) {
+                    url = uri;
+                } else if (!spotifyId.isEmpty()) {
+                    SpotifyResolvedTrack resolved = resolveSpotifyTrackWithRetry(artist, title);
+                    url = resolved.url;
+                    videoId = resolved.resolved.id;
+                } else if (!videoId.isEmpty()) {
+                    url = getFavoritePreviewUrlWithRetry(videoId);
+                } else {
+                    throw new Exception("No se puede identificar la canción");
+                }
+                if (url == null || url.isEmpty()) throw new Exception("Audio no disponible");
+                ready.add(buildFavoriteMediaItem(url, title, artist, album,
+                        fallbackCover, videoId, duration));
+            }
+            if (ready.isEmpty()) throw new Exception("No se pudo preparar ninguna canción");
+            final int count = ready.size();
+            handler.post(() -> {
+                if (mediaController == null) {
+                    Toast.makeText(this, "Reproductor no conectado", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                addItemsToPlayerQueue(ready);
+                Toast.makeText(this, "Preparadas para la cola: " + count,
+                        Toast.LENGTH_SHORT).show();
+            });
+        } catch (Exception error) {
+            android.util.Log.e("FavoritesQueue", "Error añadiendo favorito", error);
+            handler.post(() -> Toast.makeText(this,
+                    "No se pudo añadir a la cola: " + error.getMessage(),
+                    Toast.LENGTH_LONG).show());
+        }
+    });
 }
 
 private void removeFavoriteItem(
