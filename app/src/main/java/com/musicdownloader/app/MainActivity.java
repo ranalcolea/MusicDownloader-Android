@@ -4464,6 +4464,9 @@ private void showFavorites() {
 
     selectionButtons.addView(
             selectAll,
+
+
+
             new LinearLayout.LayoutParams(
                     0,
                     dp(44),
@@ -4489,6 +4492,14 @@ private void showFavorites() {
             deselectAll,
             deselectParams
     );
+
+    // PERSONAL_LISTAS_FAVORITOS_FIX_V1
+    Button personalFavorites = visualButton("＋ A mi lista");
+    personalFavorites.setOnClickListener(
+            v -> personalAddSelectedFavorites()
+    );
+    selectionButtons.addView(personalFavorites);
+
 
     LinearLayout.LayoutParams selectionParams =
             new LinearLayout.LayoutParams(
@@ -10063,6 +10074,83 @@ private void loadAlbumThumbnail(
     }
 
 
+    // PORTADAS_SPOTIFY_OFFLINE_V11: solo presentación visual.
+    // Normalización conservadora para nombres que difieren en espacios,
+    // acentos o signos. Prioriza título+artista; título solo si es único.
+    private String offlineArtworkKey(String value) {
+        if (value == null) return "";
+        String normalized = java.text.Normalizer.normalize(
+                value.toLowerCase(java.util.Locale.ROOT).trim(),
+                java.text.Normalizer.Form.NFD);
+        normalized = normalized.replaceAll("\\p{M}+", "");
+        return normalized.replaceAll("[^\\p{L}\\p{N}]+", " ")
+                .replaceAll("\\s+", " ").trim();
+    }
+
+    private void loadSpotifyThumbnailWithOffline(
+            ApiClient.SpotifyTrack track, ImageView cover, JSONArray library) {
+        if (track == null || library == null) {
+            loadSpotifyThumbnail(track, cover);
+            return;
+        }
+        String title = offlineArtworkKey(track.title);
+        String artist = offlineArtworkKey(track.artist);
+        if (title.isEmpty()) {
+            loadSpotifyThumbnail(track, cover);
+            return;
+        }
+        JSONObject exact = null;
+        JSONObject sole = null;
+        int titleMatches = 0;
+        for (int i = 0; i < library.length(); i++) {
+            JSONObject item = library.optJSONObject(i);
+            if (item == null || !title.equals(offlineArtworkKey(
+                    item.optString("title", "")))) continue;
+            titleMatches++;
+            sole = item;
+            String candidateArtist = offlineArtworkKey(item.optString("artist", ""));
+            if (!artist.isEmpty() && !candidateArtist.isEmpty()
+                    && (artist.equals(candidateArtist)
+                        || artist.contains(candidateArtist)
+                        || candidateArtist.contains(artist))) {
+                exact = item;
+                break;
+            }
+        }
+        // Con varios títulos iguales y sin artista concordante no es seguro
+        // decidir una carátula: conservar búsqueda habitual de Spotify.
+        JSONObject selected = exact != null ? exact : titleMatches == 1 ? sole : null;
+        if (selected == null) {
+            loadSpotifyThumbnail(track, cover);
+            return;
+        }
+        String audio = selected.optString("uri", "").trim();
+        String local = selected.optString("thumbnailLocal", "").trim();
+        String thumbnail = selected.optString("thumbnail", "").trim();
+        String videoId = selected.optString("videoId", "").trim();
+        String preferred = !local.isEmpty() && new java.io.File(local).isFile()
+                ? local : thumbnail;
+        if (audio.startsWith("content://") || audio.startsWith("file://")) {
+            loadOfflineThumbnail(preferred, videoId, Uri.parse(audio), cover);
+            return;
+        }
+        if (!preferred.isEmpty() && new java.io.File(preferred).isFile()) {
+            final Object token = new Object();
+            cover.setTag(token);
+            final String filePath = preferred;
+            artworkExecutor.execute(() -> {
+                Bitmap bitmap = BitmapFactory.decodeFile(filePath);
+                handler.post(() -> {
+                    if (cover.getTag() != token) return;
+                    if (bitmap != null) cover.setImageBitmap(bitmap);
+                    else loadSpotifyThumbnail(track, cover);
+                });
+            });
+            return;
+        }
+        loadSpotifyArtworkWithFallback(preferred, track.artist, track.title, cover);
+    }
+
 private void loadSpotifyThumbnail(
         ApiClient.SpotifyTrack track,
         ImageView imageView) {
@@ -11260,6 +11348,11 @@ private String findDeezerSpotifyArtwork(
             );
 
             card.addView(top);
+
+            Button personalTrack = visualButton("＋ Añadir a mi lista");
+            personalTrack.setOnClickListener(v -> personalAddSong(song));
+            card.addView(personalTrack);
+
 
             /*
              * ========================================================
@@ -13298,6 +13391,11 @@ private void playProgressiveSongsQueue(
 
         contentLayout.addView(header);
 
+        Button personalWholeAlbum = visualButton("＋ Añadir álbum completo a mi lista");
+        personalWholeAlbum.setOnClickListener(v -> personalAddAlbum(album));
+        contentLayout.addView(personalWholeAlbum);
+
+
         /*
          * ============================================================
          * PORTADA DEL ÁLBUM
@@ -13849,6 +13947,11 @@ private void playProgressiveSongsQueue(
                     buttons,
                     buttonsParams
             );
+
+            Button personalTrack = visualButton("＋ Añadir pista a mi lista");
+            personalTrack.setOnClickListener(v -> personalAddSong(track));
+            card.addView(personalTrack);
+
 
             /*
              * PROGRESO
@@ -14961,6 +15064,709 @@ Toast.makeText(
                 .show();
     }
 
+
+    // PERSONAL_PLAYLISTS_FASE1_20261018
+    private static final int PERSONAL_EXPORT_REQUEST = 9017;
+    private String personalExportContent = null;
+    // PERSONAL_EXPORT_FOLDER_SEPARATE_V1
+    private static final int PERSONAL_FOLDER_REQUEST = 9018;
+    private static final String PERSONAL_FOLDER_PREF = "personal_export_tree_uri";
+    private String personalExportFile = null;
+    private String personalExportMime = null;
+
+    // PERSONAL_FOLDER_INITIAL_URI_V1: solo cambia la ubicación inicial del selector.
+    private void personalChooseExportFolder() {
+        Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        pick.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+
+        String savedFolder = getSharedPreferences("settings", MODE_PRIVATE)
+                .getString(PERSONAL_FOLDER_PREF, "");
+        if (savedFolder != null && !savedFolder.isEmpty()) {
+            try {
+                Uri tree = Uri.parse(savedFolder);
+                Uri initial = android.provider.DocumentsContract.buildDocumentUriUsingTree(
+                        tree, android.provider.DocumentsContract.getTreeDocumentId(tree));
+                pick.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, initial);
+            } catch (Exception ignored) {
+                // Si la ubicación ya no es válida, se abre el selector habitual.
+            }
+        }
+        startActivityForResult(pick, PERSONAL_FOLDER_REQUEST);
+    }
+
+    // PERSONAL_LISTS_FOLDER_BROWSER_V1: ver archivos, NO cambiar ubicación guardada.
+    private void personalBrowseExportFolder() {
+        String saved = getSharedPreferences("settings", MODE_PRIVATE)
+                .getString(PERSONAL_FOLDER_PREF, "");
+        if (saved == null || saved.isEmpty()) {
+            Toast.makeText(this, "Primero configura la carpeta de listas",
+                    Toast.LENGTH_LONG).show();
+            personalChooseExportFolder();
+            return;
+        }
+        try {
+            Uri tree = Uri.parse(saved);
+            Uri start = android.provider.DocumentsContract.buildDocumentUriUsingTree(
+                    tree, android.provider.DocumentsContract.getTreeDocumentId(tree));
+            Intent browse = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            browse.addCategory(Intent.CATEGORY_OPENABLE);
+            browse.setType("*/*");
+            browse.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            browse.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, start);
+            // Este selector permite consultar los archivos: NO cambia las carpetas.
+            startActivityForResult(browse, 9021);
+        } catch (Exception e) {
+            Toast.makeText(this, "No se pudo abrir la carpeta: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private Button personalBrowseFolderButton() {
+        Button b = roundedButton();
+        b.setText("📂 VER ARCHIVOS DE MIS LISTAS");
+        b.setTextSize(12);
+        b.setAllCaps(false);
+        b.setOnClickListener(v -> personalBrowseExportFolder());
+        return b;
+    }
+
+    private Button personalExportFolderButton() {
+        Button b = roundedButton();
+        b.setText("⚙ CAMBIAR CARPETA DE LISTAS");
+        b.setTextSize(12);
+        b.setAllCaps(false);
+        b.setOnClickListener(v -> personalChooseExportFolder());
+        return b;
+    }
+
+    private void personalWriteExport() {
+        String saved = getSharedPreferences("settings", MODE_PRIVATE)
+                .getString(PERSONAL_FOLDER_PREF, "");
+        if (saved.isEmpty()) { personalChooseExportFolder(); return; }
+        try {
+            DocumentFile dir = DocumentFile.fromTreeUri(this, Uri.parse(saved));
+            if (dir == null || !dir.isDirectory() || !dir.canWrite())
+                throw new Exception("Carpeta no accesible");
+            if (personalExportContent == null || personalExportFile == null)
+                throw new Exception("No hay exportación pendiente");
+            String name = personalExportFile;
+            if (dir.findFile(name) != null) {
+                int dot = name.lastIndexOf('.');
+                String base = dot < 0 ? name : name.substring(0, dot);
+                String ext = dot < 0 ? "" : name.substring(dot);
+                int counter = 2;
+                while (dir.findFile(base + " (" + counter + ")" + ext) != null) counter++;
+                name = base + " (" + counter + ")" + ext;
+            }
+            DocumentFile document = dir.createFile(personalExportMime, name);
+            if (document == null) throw new Exception("No se pudo crear archivo");
+            try (OutputStream stream = getContentResolver().openOutputStream(document.getUri(), "w")) {
+                if (stream == null) throw new Exception("No se pudo abrir archivo");
+                stream.write(personalExportContent.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            personalExportContent = null;
+            personalExportFile = null;
+            personalExportMime = null;
+            Toast.makeText(this, "Lista exportada a la carpeta de listas", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "Error exportando: " + e.getMessage()
+                    + ". Elige otra carpeta de listas.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void personalAcceptExportFolder(Intent data) {
+        if (data == null || data.getData() == null) return;
+        Uri selected = data.getData();
+        String offline = getSharedPreferences("settings", MODE_PRIVATE)
+                .getString("offline_folder_uri", "");
+        if (!offline.isEmpty()) {
+            try {
+                String a = android.provider.DocumentsContract.getTreeDocumentId(selected);
+                String b = android.provider.DocumentsContract.getTreeDocumentId(Uri.parse(offline));
+                if (a.equals(b)) {
+                    Toast.makeText(this, "La carpeta debe ser distinta de Música offline",
+                            Toast.LENGTH_LONG).show();
+                    personalChooseExportFolder();
+                    return;
+                }
+            } catch (Exception ignored) { }
+        }
+        try {
+            int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            getContentResolver().takePersistableUriPermission(selected, flags);
+            DocumentFile folder = DocumentFile.fromTreeUri(this, selected);
+            if (folder == null || !folder.isDirectory() || !folder.canWrite())
+                throw new Exception("Carpeta sin permisos de escritura");
+            getSharedPreferences("settings", MODE_PRIVATE).edit()
+                    .putString(PERSONAL_FOLDER_PREF, selected.toString()).apply();
+            Toast.makeText(this, "Carpeta de listas configurada", Toast.LENGTH_SHORT).show();
+            if (personalExportContent != null) personalWriteExport();
+        } catch (Exception e) {
+            Toast.makeText(this, "No se guardó la carpeta: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void personalCreateList() {
+        EditText name = new EditText(this);
+        name.setHint("Nombre de la lista");
+        new AlertDialog.Builder(this).setTitle("Nueva lista personalizada")
+            .setView(name).setNegativeButton("Cancelar", null)
+            .setPositiveButton("Crear", (d, w) -> {
+                try {
+                    PersonalPlaylists.create(this, name.getText().toString());
+                    Toast.makeText(this, "Lista creada", Toast.LENGTH_SHORT).show();
+                    personalShowLists();
+                } catch (Exception e) {
+                    Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            }).show();
+    }
+
+    private void personalShowLists() {
+        JSONArray all = PersonalPlaylists.load(this);
+        if(all.length()==0) { personalCreateList(); return; }
+        String[] names = new String[all.length()];
+        for(int i=0;i<all.length();i++) {
+            JSONObject list=all.optJSONObject(i);
+            names[i]=list==null?"Lista":list.optString("name", "Lista")
+                + " ("+(list.optJSONArray("tracks")==null?0:list.optJSONArray("tracks").length())+")";
+        }
+        new AlertDialog.Builder(this).setTitle("Mis listas personalizadas")
+            .setItems(names, (d, index) -> {
+                JSONObject list=all.optJSONObject(index);
+                if(list!=null) personalOpenEditor(list.optString("id"));
+            }).setPositiveButton("+ Nueva", (d, w) -> personalCreateList())
+            .setNegativeButton("Cerrar",null).show();
+    }
+
+
+    // PERSONAL_EDITOR_V2_20261018
+    private void personalOpenEditor(String id) {
+        JSONObject list=PersonalPlaylists.get(this,id);
+        if(list==null) { Toast.makeText(this,"Lista no encontrada",Toast.LENGTH_LONG).show(); return; }
+        // PERSONAL_DELETE_LIST_V4_20261018
+        String[] options={"Ver y editar canciones", "Renombrar lista", "Exportar CSV / TXT / JSON", "🗑 Eliminar esta lista"};
+        new AlertDialog.Builder(this).setTitle("✏ " + list.optString("name"))
+            .setItems(options,(d,which)->{
+                if(which==0) personalEditTracks(id);
+                else if(which==1) personalRenameList(id);
+                else if(which==2) personalChooseExport(list);
+                else personalConfirmDeleteList(id);
+            }).setNegativeButton("Cerrar",null).show();
+    }
+
+    private void personalConfirmDeleteList(String id) {
+        JSONObject current = PersonalPlaylists.get(this, id);
+        if (current == null) {
+            Toast.makeText(this, "La lista ya no existe", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String name = current.optString("name", "Lista");
+        new AlertDialog.Builder(this)
+            .setTitle("Eliminar lista personalizada")
+            .setMessage("¿Eliminar definitivamente «" + name + "»?\n\n" +
+                "Se borrará esta lista y sus referencias a canciones. " +
+                "Los archivos de música y las listas importadas de Spotify no se tocarán.")
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Eliminar", (dialog, which) -> {
+                try {
+                    PersonalPlaylists.deleteList(this, id);
+                    Toast.makeText(this, "Lista eliminada", Toast.LENGTH_SHORT).show();
+                    // Refrescar para que no aparezca la lista borrada.
+                    if (PersonalPlaylists.load(this).length() > 0) personalShowLists();
+                } catch (Exception e) {
+                    Toast.makeText(this, "Error al borrar: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            }).show();
+    }
+
+    private void personalRenameList(String id) {
+        JSONObject list=PersonalPlaylists.get(this,id);
+        if(list==null) return;
+        EditText input=new EditText(this);
+        input.setSingleLine(true);
+        input.setText(list.optString("name"));
+        new AlertDialog.Builder(this).setTitle("Renombrar lista")
+            .setView(input).setNegativeButton("Cancelar",null)
+            .setPositiveButton("Guardar",(d,w)->{
+                try { PersonalPlaylists.rename(this,id,input.getText().toString()); personalOpenEditor(id); }
+                catch(Exception e) { Toast.makeText(this,e.getMessage(),Toast.LENGTH_LONG).show(); }
+            }).show();
+    }
+
+    // PERSONAL_ARTWORK_DURATION_V7: enriquecer listas antiguas a partir de Offline.
+    // No toca biblioteca, archivos de audio, reproducción ni colas.
+    private void personalRecoverOfflineMetadata(String listId) {
+        try {
+            JSONArray all = loadOfflineLibrary();
+            if (all.length() == 0) return;
+            JSONObject list = PersonalPlaylists.get(this, listId);
+            if (list == null) return;
+            JSONArray tracks = list.optJSONArray("tracks");
+            if (tracks == null) return;
+            for (int i = 0; i < tracks.length(); i++) {
+                JSONObject track = tracks.optJSONObject(i);
+                if (track == null) continue;
+                boolean missingCover = track.optString("thumbnailLocal").isEmpty();
+                boolean missingTime = track.optLong("duration", 0L) <= 0;
+                if (!missingCover && !missingTime) continue;
+                String title = track.optString("title", "").trim();
+                String artist = track.optString("artist", "").trim();
+                String uri = track.optString("uri", "").trim();
+                if (title.isEmpty()) continue;
+                for (int j = 0; j < all.length(); j++) {
+                    JSONObject offline = all.optJSONObject(j);
+                    if (offline == null) continue;
+                    boolean sameUri = !uri.isEmpty() && uri.equals(offline.optString("uri"));
+                    boolean sameName = title.equalsIgnoreCase(offline.optString("title", "").trim())
+                        && (artist.isEmpty() || offline.optString("artist", "").trim().isEmpty()
+                            || artist.equalsIgnoreCase(offline.optString("artist", "").trim()));
+                    if (!sameUri && !sameName) continue;
+                    JSONObject fields = new JSONObject();
+                    String local = offline.optString("thumbnailLocal", "");
+                    if (!local.isEmpty() && new java.io.File(local).isFile())
+                        fields.put("thumbnailLocal", local);
+                    if (track.optString("thumbnail", "").isEmpty())
+                        fields.put("thumbnail", offline.optString("thumbnail", ""));
+                    if (track.optString("videoId", "").isEmpty())
+                        fields.put("videoId", offline.optString("videoId", ""));
+                    if (missingTime && offline.optLong("duration", 0) > 0)
+                        fields.put("duration", offline.optLong("duration"));
+                    if (fields.length() > 0) PersonalPlaylists.mergeTrackMetadata(this, listId, i, fields);
+                    break;
+                }
+            }
+        } catch (Exception error) {
+            android.util.Log.w("PersonalPlaylists", "Metadatos Offline", error);
+        }
+    }
+
+    // PERSONAL_OFFLINE_COVER_V8: misma recuperación de carátulas que usa Offline.
+    // Soporta rutas locales en thumbnail y thumbnailLocal y portada incrustada.
+    private void personalLoadEditorArtwork(JSONObject t, ImageView artwork) {
+        String local = t.optString("thumbnailLocal", "").trim();
+        String thumbnail = t.optString("thumbnail", "").trim();
+        String uri = t.optString("uri", "").trim();
+        String videoId = t.optString("videoId", "").trim();
+
+        if (uri.startsWith("content://") || uri.startsWith("file://")) {
+            String preferred = !local.isEmpty() && new java.io.File(local).isFile()
+                    ? local : thumbnail;
+            loadOfflineThumbnail(preferred, videoId, Uri.parse(uri), artwork);
+            return;
+        }
+
+        String path = !local.isEmpty() && new java.io.File(local).isFile()
+                ? local : thumbnail;
+        if (!path.isEmpty() && new java.io.File(path).isFile()) {
+            final Object token = new Object();
+            artwork.setTag(token);
+            artworkExecutor.execute(() -> {
+                Bitmap bitmap = BitmapFactory.decodeFile(path);
+                handler.post(() -> {
+                    if (artwork.getTag() != token) return;
+                    if (bitmap != null) artwork.setImageBitmap(bitmap);
+                    else loadSpotifyArtworkWithFallback(thumbnail,
+                            t.optString("artist"), t.optString("title"), artwork);
+                });
+            });
+        } else {
+            loadSpotifyArtworkWithFallback(thumbnail, t.optString("artist"),
+                    t.optString("title"), artwork);
+        }
+    }
+
+    // PERSONAL_OFFLINE_DURATION_V9
+    // Recupera tiempo del propio archivo solo cuando no existe en la lista.
+    // Se ejecuta fuera del hilo gráfico y nunca modifica los audios Offline.
+    private void personalResolveOfflineDuration(String listId, int position,
+            JSONObject entry, TextView label) {
+        final String title = entry.optString("title", "").trim();
+        final String artist = entry.optString("artist", "").trim();
+        final String knownUri = entry.optString("uri", "").trim();
+        artworkExecutor.execute(() -> {
+            try {
+                String audioUri = knownUri;
+                long seconds = 0L;
+                JSONArray library = loadOfflineLibrary();
+                for (int i = 0; i < library.length(); i++) {
+                    JSONObject song = library.optJSONObject(i);
+                    if (song == null) continue;
+                    String candidateUri = song.optString("uri", "").trim();
+                    boolean matchesUri = !audioUri.isEmpty() && audioUri.equals(candidateUri);
+                    boolean matchesNames = !title.isEmpty()
+                            && title.equalsIgnoreCase(song.optString("title", "").trim())
+                            && (artist.isEmpty()
+                                || artist.equalsIgnoreCase(song.optString("artist", "").trim()));
+                    if (!matchesUri && !matchesNames) continue;
+                    seconds = song.optLong("duration", 0L);
+                    if (!candidateUri.isEmpty()) audioUri = candidateUri;
+                    break;
+                }
+                if (seconds <= 0 && !audioUri.isEmpty()
+                        && (audioUri.startsWith("content://")
+                            || audioUri.startsWith("file://"))) {
+                    MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+                    try {
+                        retriever.setDataSource(this, Uri.parse(audioUri));
+                        String length = retriever.extractMetadata(
+                                MediaMetadataRetriever.METADATA_KEY_DURATION);
+                        if (length != null && !length.isEmpty()) {
+                            long ms = Long.parseLong(length);
+                            if (ms > 0) seconds = Math.max(1L, ms / 1000L);
+                        }
+                    } finally {
+                        retriever.release();
+                    }
+                }
+                if (seconds <= 0) return;
+                JSONObject meta = new JSONObject();
+                meta.put("duration", seconds);
+                PersonalPlaylists.mergeTrackMetadata(this, listId, position, meta);
+                final long resolved = seconds;
+                handler.post(() -> {
+                    if (label.getParent() != null) {
+                        label.setText(String.format(java.util.Locale.getDefault(),
+                                "%d:%02d", resolved / 60L, resolved % 60L));
+                    }
+                });
+            } catch (Exception error) {
+                android.util.Log.d("PersonalPlaylists", "Sin duración Offline", error);
+            }
+        });
+    }
+
+    // EDITOR_VISUAL_PERSONAL_V3_20261018
+    // Vista de tarjetas; mantiene personalEditOneTrack para subir, bajar y quitar.
+    private AlertDialog personalVisualEditorDialog;
+
+    private void personalEditTracks(String id) {
+        personalRecoverOfflineMetadata(id);
+        JSONObject list = PersonalPlaylists.get(this, id);
+        if (list == null) {
+            Toast.makeText(this, "La lista ya no existe", Toast.LENGTH_LONG).show();
+            return;
+        }
+        JSONArray tracks = list.optJSONArray("tracks");
+        final int count = tracks == null ? 0 : tracks.length();
+
+        LinearLayout vertical = new LinearLayout(this);
+        vertical.setOrientation(LinearLayout.VERTICAL);
+        vertical.setPadding(dp(12), dp(6), dp(12), dp(10));
+        vertical.setBackgroundColor(Color.rgb(19, 20, 27));
+
+        TextView subtitle = new TextView(this);
+        subtitle.setText(count + (count == 1 ? " canción · Toca para editar" : " canciones · Toca para editar"));
+        subtitle.setTextSize(13);
+        subtitle.setTextColor(Color.rgb(170, 170, 187));
+        subtitle.setPadding(dp(4), dp(5), dp(4), dp(12));
+        vertical.addView(subtitle);
+
+        if (count == 0) {
+            TextView empty = new TextView(this);
+            empty.setText("Lista vacía. Añade canciones desde Música, Álbumes, Spotify, Favoritos u Offline.");
+            empty.setTextColor(Color.LTGRAY);
+            empty.setPadding(dp(12), dp(22), dp(12), dp(22));
+            vertical.addView(empty);
+        } else {
+            for (int i = 0; i < count; i++) {
+                final int index = i;
+                JSONObject t = tracks.optJSONObject(i);
+                if (t == null) continue;
+
+                LinearLayout card = new LinearLayout(this);
+                card.setOrientation(LinearLayout.HORIZONTAL);
+                card.setGravity(Gravity.CENTER_VERTICAL);
+                card.setPadding(dp(9), dp(8), dp(9), dp(8));
+                card.setBackground(roundedBackground(
+                        Color.rgb(30, 31, 42), Color.rgb(73, 72, 98), dp(15)));
+                card.setElevation(dp(2));
+
+                LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, dp(78));
+                cardParams.setMargins(dp(2), dp(3), dp(2), dp(6));
+
+                TextView number = new TextView(this);
+                number.setText(String.valueOf(i + 1));
+                number.setTextSize(13);
+                number.setGravity(Gravity.CENTER);
+                number.setTextColor(Color.rgb(171, 165, 207));
+                card.addView(number, new LinearLayout.LayoutParams(dp(27), -1));
+
+                ImageView artwork = new ImageView(this);
+                artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                artwork.setImageResource(android.R.drawable.ic_menu_gallery);
+                artwork.setBackground(roundedBackground(
+                        Color.rgb(43, 42, 58), Color.rgb(85, 78, 106), dp(11)));
+                artwork.setClipToOutline(true);
+                LinearLayout.LayoutParams coverParams =
+                        new LinearLayout.LayoutParams(dp(56), dp(56));
+                coverParams.setMargins(0, 0, dp(11), 0);
+                card.addView(artwork, coverParams);
+
+                LinearLayout info = new LinearLayout(this);
+                info.setOrientation(LinearLayout.VERTICAL);
+                info.setGravity(Gravity.CENTER_VERTICAL);
+
+                TextView title = new TextView(this);
+                title.setText(t.optString("title", "Canción"));
+                title.setTextColor(Color.WHITE);
+                title.setTypeface(null, android.graphics.Typeface.BOLD);
+                title.setTextSize(14);
+                title.setSingleLine(true);
+                title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                info.addView(title);
+
+                TextView artist = new TextView(this);
+                artist.setText(t.optString("artist", "Artista desconocido"));
+                artist.setTextColor(Color.rgb(171, 170, 189));
+                artist.setTextSize(12);
+                artist.setSingleLine(true);
+                artist.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                info.addView(artist);
+
+                long seconds = t.optLong("duration", 0L);
+                TextView duration = new TextView(this);
+                duration.setText(seconds > 0
+                        ? String.format(java.util.Locale.getDefault(),
+                                "%d:%02d", seconds / 60L, seconds % 60L)
+                        : "--:--");
+                duration.setTextColor(Color.rgb(145, 144, 165));
+                duration.setTextSize(11);
+                info.addView(duration);
+                if (seconds <= 0) personalResolveOfflineDuration(id, index, t, duration);
+                card.addView(info, new LinearLayout.LayoutParams(0, -1, 1f));
+
+                TextView edit = new TextView(this);
+                edit.setText("⋮");
+                edit.setTextColor(Color.rgb(199, 181, 255));
+                edit.setTextSize(27);
+                edit.setGravity(Gravity.CENTER);
+                edit.setContentDescription("Editar canción");
+                card.addView(edit, new LinearLayout.LayoutParams(dp(38), -1));
+
+                View.OnClickListener openMenu = v -> {
+                    // Cerrar primero el diálogo con tarjetas antes de abrir las acciones.
+                    if (personalVisualEditorDialog != null) {
+                        personalVisualEditorDialog.dismiss();
+                        personalVisualEditorDialog = null;
+                    }
+                    personalEditOneTrack(id, index);
+                };
+                card.setOnClickListener(openMenu);
+                edit.setOnClickListener(openMenu);
+                vertical.addView(card, cardParams);
+
+                // Misma obtención asíncrona de carátulas que las listas Spotify.
+                // No se modifica ni reproduce contenido de audio.
+                personalLoadEditorArtwork(t, artwork);
+            }
+        }
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.addView(vertical);
+        personalVisualEditorDialog = new AlertDialog.Builder(this)
+                .setTitle("✏ " + list.optString("name"))
+                .setView(scroll)
+                .setPositiveButton("Exportar", (dialog, which) -> personalChooseExport(list))
+                .setNegativeButton("Cerrar", null)
+                .create();
+        personalVisualEditorDialog.setOnDismissListener(dialog -> personalVisualEditorDialog = null);
+        personalVisualEditorDialog.show();
+    }
+
+    private void personalEditOneTrack(String id,int index) {
+        JSONObject list=PersonalPlaylists.get(this,id);
+        if(list==null) return;
+        JSONArray tracks=list.optJSONArray("tracks");
+        JSONObject track=tracks==null?null:tracks.optJSONObject(index);
+        if(track==null) return;
+        new AlertDialog.Builder(this).setTitle(track.optString("title"))
+            .setItems(new String[]{"↑ Subir", "↓ Bajar", "Quitar de la lista"},(d,which)->{
+                try {
+                    if(which==0) PersonalPlaylists.moveTrack(this,id,index,-1);
+                    if(which==1) PersonalPlaylists.moveTrack(this,id,index,+1);
+                    if(which==2) {
+                        new AlertDialog.Builder(this).setTitle("Quitar canción")
+                            .setMessage("¿Quitar esta canción de la lista? No se borrará el audio.")
+                            .setNegativeButton("Cancelar",(d2,w2)->personalEditTracks(id))
+                            .setPositiveButton("Quitar",(d2,w2)->{
+                                try { PersonalPlaylists.removeTrack(this,id,index); }
+                                catch(Exception e) { Toast.makeText(this,e.getMessage(),Toast.LENGTH_LONG).show(); }
+                                personalEditTracks(id);
+                            }).show();
+                        return;
+                    }
+                } catch(Exception e) { Toast.makeText(this,e.getMessage(),Toast.LENGTH_LONG).show(); }
+                personalEditTracks(id);
+            }).setNegativeButton("Volver",(d,w)->personalEditTracks(id)).show();
+    }
+
+    private JSONObject personalSong(String title,String artist,String album,int duration,String uri) {
+        JSONObject song=new JSONObject();
+        try {
+            song.put("title",title==null?"":title.trim());
+            song.put("artist",artist==null?"":artist.trim());
+            song.put("album",album==null?"":album.trim());
+            song.put("duration",Math.max(0,duration));
+            song.put("uri",uri==null?"":uri);
+        } catch(Exception ignored) { }
+        return song;
+    }
+
+    private JSONObject personalFromSong(ApiClient.Song song) {
+        String artist= song.artist==null || song.artist.trim().isEmpty()?song.channel:song.artist;
+        JSONObject item = personalSong(song.title,artist,song.album,song.duration,"");
+        try { item.put("thumbnail", song.thumbnail); item.put("videoId", song.videoId); }
+        catch (Exception ignored) { }
+        return item;
+    }
+
+    private JSONObject personalFromSpotify(ApiClient.SpotifyTrack track) {
+        JSONObject item = personalSong(track.title,track.artist,track.album,track.duration,"");
+        try { item.put("thumbnail", track.thumbnail); }
+        catch (Exception ignored) { }
+        return item;
+    }
+
+    private void personalChooseListForSongs(JSONArray songs) {
+        if(songs.length()==0) {
+            Toast.makeText(this,"No hay canciones seleccionadas",Toast.LENGTH_SHORT).show(); return;
+        }
+        JSONArray all=PersonalPlaylists.load(this);
+        String[] names=new String[all.length()+1];
+        for(int i=0;i<all.length();i++) names[i]=all.optJSONObject(i).optString("name");
+        names[all.length()]="➕ Crear nueva lista";
+        new AlertDialog.Builder(this).setTitle("Añadir "+songs.length()+" canciones a...")
+            .setItems(names,(d,which)->{
+                if(which==all.length()) {
+                    EditText input=new EditText(this);
+                    input.setHint("Nombre de la lista");
+                    new AlertDialog.Builder(this).setTitle("Nueva lista")
+                        .setView(input).setNegativeButton("Cancelar",null)
+                        .setPositiveButton("Crear y añadir",(d2,w)->{
+                            try {
+                                String id=PersonalPlaylists.create(this,input.getText().toString());
+                                PersonalPlaylists.add(this,id,songs);
+                                Toast.makeText(this,"Canciones añadidas",Toast.LENGTH_SHORT).show();
+                            } catch(Exception e) { Toast.makeText(this,e.getMessage(),Toast.LENGTH_LONG).show(); }
+                        }).show();
+                    return;
+                }
+                try {
+                    PersonalPlaylists.add(this,all.getJSONObject(which).optString("id"),songs);
+                    Toast.makeText(this,"Canciones añadidas",Toast.LENGTH_SHORT).show();
+                } catch(Exception e) { Toast.makeText(this,e.getMessage(),Toast.LENGTH_LONG).show(); }
+            }).setNegativeButton("Cancelar",null).show();
+    }
+
+    private void personalAddSong(ApiClient.Song song) {
+        JSONArray songs=new JSONArray(); songs.put(personalFromSong(song)); personalChooseListForSongs(songs);
+    }
+    private void personalAddSpotifyTrack(ApiClient.SpotifyTrack track) {
+        JSONArray songs=new JSONArray(); songs.put(personalFromSpotify(track)); personalChooseListForSongs(songs);
+    }
+    private void personalAddAlbum(ApiClient.Album album) {
+        JSONArray songs=new JSONArray();
+        for(ApiClient.Song track:album.tracks) {
+            JSONObject item = personalSong(track.title,
+                track.artist==null || track.artist.isEmpty()?album.artist:track.artist,
+                album.title,track.duration,"");
+            try { item.put("thumbnail", track.thumbnail); item.put("videoId", track.videoId); }
+            catch(Exception ignored) { }
+            songs.put(item);
+        }
+        personalChooseListForSongs(songs);
+    }
+    private void personalAddSelectedSpotify() {
+        JSONArray songs=new JSONArray();
+        for(int i=0;i<spotifySelectionChecks.size() && i<spotifySelectionTracks.size();i++)
+            if(spotifySelectionChecks.get(i).isChecked())
+                songs.put(personalFromSpotify(spotifySelectionTracks.get(i)));
+        personalChooseListForSongs(songs);
+    }
+    private void personalAddSelectedFavorites() {
+        JSONArray songs=new JSONArray();
+        for(CheckBox check:favoriteSelectionChecks) {
+            if(!check.isChecked() || !(check.getTag() instanceof JSONObject)) continue;
+            JSONObject t=(JSONObject)check.getTag();
+            if("album".equals(t.optString("type"))) {
+                JSONArray albumTracks=t.optJSONArray("tracks");
+                if(albumTracks!=null) for(int i=0;i<albumTracks.length();i++) {
+                    JSONObject x=albumTracks.optJSONObject(i);
+                    if(x!=null) songs.put(personalSong(x.optString("title"),x.optString("artist",t.optString("artist")),
+                        x.optString("album",t.optString("title")),x.optInt("duration"),""));
+                }
+            } else songs.put(personalSong(t.optString("title"),t.optString("artist"),
+                t.optString("album"),t.optInt("duration"),""));
+        }
+        personalChooseListForSongs(songs);
+    }
+
+    private void personalChooseExport(JSONObject list) {
+        String[] formats={"Exportar CSV", "Exportar TXT", "Exportar JSON"};
+        new AlertDialog.Builder(this).setTitle(list.optString("name"))
+            .setItems(formats,(d, index) -> {
+                String ext=new String[]{"csv","txt","json"}[index];
+                try {
+                    personalExportContent=PersonalPlaylists.export(list,ext);
+                    personalExportMime=ext.equals("json")?"application/json":
+                            ext.equals("csv")?"text/csv":"text/plain";
+                    String filename=list.optString("name","Mi lista").replaceAll("[\\/:*?\"<>|]", "_");
+                    personalExportFile=filename+"."+ext;
+                    personalWriteExport();
+                } catch(Exception e) {
+                    Toast.makeText(this,"No se pudo exportar: "+e.getMessage(),Toast.LENGTH_LONG).show();
+                }
+            }).setNegativeButton("Cerrar",null).show();
+    }
+
+    private void personalAddSelectedOffline(JSONArray library) {
+        JSONArray selected=new JSONArray();
+        for(int i=0;i<library.length();i++) {
+            if(i>=offlineSelectionChecks.size() || !offlineSelectionChecks.get(i).isChecked()) continue;
+            JSONObject item=library.optJSONObject(i);
+            if(item!=null) selected.put(item);
+        }
+        if(selected.length()==0) {
+            Toast.makeText(this,"Selecciona canciones Offline",Toast.LENGTH_SHORT).show();
+            return;
+        }
+        JSONArray lists=PersonalPlaylists.load(this);
+        if(lists.length()==0) {
+            EditText name=new EditText(this);
+            name.setHint("Nombre de la lista");
+            new AlertDialog.Builder(this).setTitle("Crear lista para las canciones")
+                .setView(name).setNegativeButton("Cancelar",null)
+                .setPositiveButton("Crear y añadir",(d,w)->{
+                    try {
+                        String id=PersonalPlaylists.create(this,name.getText().toString());
+                        PersonalPlaylists.add(this,id,selected);
+                        Toast.makeText(this,"Canciones añadidas a tu lista",Toast.LENGTH_SHORT).show();
+                    } catch(Exception e) {
+                        Toast.makeText(this,e.getMessage(),Toast.LENGTH_LONG).show();
+                    }
+                }).show();
+            return;
+        }
+        String[] names=new String[lists.length()];
+        for(int i=0;i<lists.length();i++) names[i]=lists.optJSONObject(i).optString("name");
+        new AlertDialog.Builder(this).setTitle("Añadir "+selected.length()+" canciones a...")
+            .setItems(names,(d,index)->{
+                try {
+                    PersonalPlaylists.add(this,lists.getJSONObject(index).optString("id"),selected);
+                    Toast.makeText(this,"Canciones añadidas",Toast.LENGTH_SHORT).show();
+                } catch(Exception e) {
+                    Toast.makeText(this,e.getMessage(),Toast.LENGTH_LONG).show();
+                }
+            }).setNegativeButton("Cancelar",null).show();
+    }
+
     private void showSpotifyHome() {
 
         currentScreen = "spotify";
@@ -15094,18 +15900,63 @@ exportifyButton.setOnLongClickListener(v -> {
                                     "text/csv",
                                     "text/comma-separated-values",
                                     "application/csv",
+                                    "application/json",
                                     "text/plain"
                             }
                     );
 
+                    // UNIFIED_PERSONAL_IMPORT_FOLDER_V5
+
+                    String folderForImport = getSharedPreferences("settings", MODE_PRIVATE)
+
+                            .getString(PERSONAL_FOLDER_PREF, "");
+
+                    if (folderForImport != null && !folderForImport.isEmpty()) {
+
+                        try {
+
+                            Uri tree = Uri.parse(folderForImport);
+
+                            Uri first = android.provider.DocumentsContract.buildDocumentUriUsingTree(
+
+                                    tree, android.provider.DocumentsContract.getTreeDocumentId(tree));
+
+                            intent.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, first);
+
+                        } catch (Exception ignored) { }
+
+                    }
+
+                    // También permitir JSON además de CSV y TXT.
+
+                    intent.setType("*/*");
+
+                    intent.removeExtra(Intent.EXTRA_MIME_TYPES);
+
+                    intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+
+                            "text/csv", "text/comma-separated-values", "application/csv",
+
+                            "application/json", "text/plain", "application/octet-stream"});
+
+                    
                     startActivityForResult(
                             intent,
                             PICK_PLAYLIST_FILE
                     );
                 }
         );
-
         contentLayout.addView(fileButton);
+
+        Button personalCreateButton = roundedButton();
+        personalCreateButton.setText("➕ CREAR MI LISTA");
+        personalCreateButton.setOnClickListener(v -> personalCreateList());
+        contentLayout.addView(personalCreateButton);
+
+        Button personalListsButton = roundedButton();
+        personalListsButton.setText("📚 MIS LISTAS PERSONALIZADAS");
+        personalListsButton.setOnClickListener(v -> personalShowLists());
+        contentLayout.addView(personalListsButton);
 
         Button savedButton =
                 roundedButton();
@@ -15578,13 +16429,47 @@ exportifyButton.setOnLongClickListener(v -> {
                             }
                     );
 
+                    // UNIFIED_PERSONAL_IMPORT_FOLDER_V5
+
+                    String folderForImport = getSharedPreferences("settings", MODE_PRIVATE)
+
+                            .getString(PERSONAL_FOLDER_PREF, "");
+
+                    if (folderForImport != null && !folderForImport.isEmpty()) {
+
+                        try {
+
+                            Uri tree = Uri.parse(folderForImport);
+
+                            Uri first = android.provider.DocumentsContract.buildDocumentUriUsingTree(
+
+                                    tree, android.provider.DocumentsContract.getTreeDocumentId(tree));
+
+                            intent.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, first);
+
+                        } catch (Exception ignored) { }
+
+                    }
+
+                    // También permitir JSON además de CSV y TXT.
+
+                    intent.setType("*/*");
+
+                    intent.removeExtra(Intent.EXTRA_MIME_TYPES);
+
+                    intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+
+                            "text/csv", "text/comma-separated-values", "application/csv",
+
+                            "application/json", "text/plain", "application/octet-stream"});
+
+                    
                     startActivityForResult(
                             intent,
                             PICK_PLAYLIST_FILE
                     );
                 }
         );
-
         // Botones compactos con el estilo original de la APK.
         exportifyButton.setText("Exportify");
 fileButton.setText("📂 Archivo");
@@ -15610,6 +16495,39 @@ fileButton.setText("📂 Archivo");
         importRow.addView(fileButton, right);
 
         root.addView(importRow);
+
+        // PERSONAL_PLAYLISTS_SPOTIFY_VISIBLE_V1
+        // Mantener visibles las listas personales al refrescar Spotify.
+        LinearLayout personalRow = new LinearLayout(this);
+        personalRow.setOrientation(LinearLayout.HORIZONTAL);
+
+        Button createPersonal = roundedButton();
+        createPersonal.setText("➕ CREAR MI LISTA");
+        createPersonal.setTextSize(12);
+        createPersonal.setAllCaps(false);
+        createPersonal.setOnClickListener(v -> personalCreateList());
+
+        Button openPersonal = roundedButton();
+        openPersonal.setText("📚 MIS LISTAS");
+        openPersonal.setTextSize(12);
+        openPersonal.setAllCaps(false);
+        openPersonal.setOnClickListener(v -> personalShowLists());
+
+        LinearLayout.LayoutParams p1 =
+                new LinearLayout.LayoutParams(0, dp(46), 1);
+        p1.setMargins(0, dp(3), dp(4), dp(7));
+
+        LinearLayout.LayoutParams p2 =
+                new LinearLayout.LayoutParams(0, dp(46), 1);
+        p2.setMargins(dp(4), dp(3), 0, dp(7));
+
+        personalRow.addView(createPersonal, p1);
+        personalRow.addView(openPersonal, p2);
+
+        root.addView(personalRow);
+        // PERSONAL_IMPORT_ONE_BUTTON_V6
+        root.addView(personalExportFolderButton());
+
 
         // =========================================================
         // CABECERA DE LA PERSIANA
@@ -17344,6 +18262,26 @@ selectionButtons.addView(
                 selectionButtonsParams
         );
 
+        Button personalSelected = spotifyModernButton("＋ Seleccionadas a mi lista",false);
+        // PERSONAL_SPOTIFY_BUTTONS_ONLY_V12
+        personalSelected.setMinHeight(dp(48));
+        personalSelected.setMinimumHeight(dp(48));
+        personalSelected.setPadding(dp(12), dp(8), dp(12), dp(8));
+        personalSelected.setOnClickListener(v -> personalAddSelectedSpotify());
+        contentLayout.addView(personalSelected);
+        Button personalAll = spotifyModernButton("＋ Toda esta playlist a mi lista",false);
+        // PERSONAL_SPOTIFY_BUTTONS_ONLY_V12
+        personalAll.setMinHeight(dp(48));
+        personalAll.setMinimumHeight(dp(48));
+        personalAll.setPadding(dp(12), dp(8), dp(12), dp(8));
+        personalAll.setOnClickListener(v -> {
+            JSONArray selected=new JSONArray();
+            for(ApiClient.SpotifyTrack t:playlist.tracks) selected.put(personalFromSpotify(t));
+            personalChooseListForSongs(selected);
+        });
+        contentLayout.addView(personalAll);
+
+
         selectAll.setOnClickListener(v -> {
             for (CheckBox check : spotifySelectionChecks) {
                 check.setChecked(true);
@@ -17364,6 +18302,8 @@ selectionButtons.addView(
                 new ArrayList<>();
 
         spotifyPreparationStatusViews.clear();
+
+        final JSONArray offlineArtworkLibrary = loadOfflineLibrary();
 
         int spotifyTrackIndex = 0;
 
@@ -17789,6 +18729,11 @@ selectionButtons.addView(
                     buttonsParams
             );
 
+            Button personalTrack = spotifyModernButton("＋ Mi lista",false);
+            personalTrack.setOnClickListener(v -> personalAddSpotifyTrack(track));
+            row.addView(personalTrack);
+
+
             /*
              * DESCARGA NORMAL
              */
@@ -17921,9 +18866,10 @@ selectionButtons.addView(
              * PORTADA
              */
 
-            loadSpotifyThumbnail(
+            loadSpotifyThumbnailWithOffline(
                     track,
-                    cover
+                    cover,
+                    offlineArtworkLibrary
             );
 
             contentLayout.addView(
@@ -23387,6 +24333,30 @@ protected void onActivityResult(
             data
     );
 
+    if (requestCode == PERSONAL_FOLDER_REQUEST) {
+        if (resultCode == RESULT_OK) personalAcceptExportFolder(data);
+        return;
+    }
+
+    if (requestCode == PERSONAL_EXPORT_REQUEST) {
+        try {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null
+                    && personalExportContent != null) {
+                try (OutputStream output = getContentResolver().openOutputStream(data.getData())) {
+                    if (output == null) throw new Exception("No se pudo abrir archivo");
+                    output.write(personalExportContent.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+                Toast.makeText(this, "Lista exportada correctamente", Toast.LENGTH_SHORT).show();
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, "Error exportando: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        } finally {
+            personalExportContent = null;
+        }
+        return;
+    }
+
+
     if (requestCode == PICK_PLAYLIST_FILE
             && resultCode == RESULT_OK
             && data != null) {
@@ -25214,6 +26184,12 @@ private void showOfflineLibrary() {
             playAll,
             playAllParams
     );
+
+    Button addToPersonal = roundedButton();
+    addToPersonal.setText("➕ AÑADIR SELECCIONADAS A MI LISTA");
+    addToPersonal.setOnClickListener(v -> personalAddSelectedOffline(library));
+    contentLayout.addView(addToPersonal);
+
 
     /*
      * ============================================================
