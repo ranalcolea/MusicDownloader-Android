@@ -25194,9 +25194,16 @@ private JSONArray scanOfflineFolder() {
                             java.util.Locale.ROOT
                     );
 
-            if (!lowerName.endsWith(".mp3") &&
-                    !lowerName.endsWith(".opus")) {
+            boolean supportedAudio = false;
 
+            for (String extension : new String[]{".mp3", ".opus", ".m4a", ".aac", ".flac", ".wav", ".ogg", ".oga", ".aiff", ".aif", ".amr", ".mka", ".3gp"}) {
+                if (lowerName.endsWith(extension)) {
+                    supportedAudio = true;
+                    break;
+                }
+            }
+
+            if (!supportedAudio) {
                 continue;
             }
 
@@ -25389,24 +25396,12 @@ private JSONArray scanOfflineFolder() {
                             java.util.Locale.ROOT
                     );
 
-            String title =
-                    name;
+            String title = name;
 
-            if (lowerName.endsWith(".mp3")) {
+            int extensionDot = name.lastIndexOf('.');
 
-                title =
-                        name.substring(
-                                0,
-                                name.length() - 4
-                        );
-
-            } else if (lowerName.endsWith(".opus")) {
-
-                title =
-                        name.substring(
-                                0,
-                                name.length() - 5
-                        );
+            if (extensionDot > 0) {
+                title = name.substring(0, extensionDot);
             }
 
             JSONObject item =
