@@ -15253,38 +15253,72 @@ Toast.makeText(
         return b;
     }
 
+    // PERSONAL_EXPORT_OVERWRITE_V1
     private void personalWriteExport() {
         String saved = getSharedPreferences("settings", MODE_PRIVATE)
                 .getString(PERSONAL_FOLDER_PREF, "");
-        if (saved.isEmpty()) { personalChooseExportFolder(); return; }
+        if (saved.isEmpty()) {
+            personalChooseExportFolder();
+            return;
+        }
         try {
             DocumentFile dir = DocumentFile.fromTreeUri(this, Uri.parse(saved));
             if (dir == null || !dir.isDirectory() || !dir.canWrite())
                 throw new Exception("Carpeta no accesible");
             if (personalExportContent == null || personalExportFile == null)
                 throw new Exception("No hay exportación pendiente");
-            String name = personalExportFile;
-            if (dir.findFile(name) != null) {
-                int dot = name.lastIndexOf('.');
-                String base = dot < 0 ? name : name.substring(0, dot);
-                String ext = dot < 0 ? "" : name.substring(dot);
-                int counter = 2;
-                while (dir.findFile(base + " (" + counter + ")" + ext) != null) counter++;
-                name = base + " (" + counter + ")" + ext;
+
+            final String name = personalExportFile;
+            final DocumentFile existing = dir.findFile(name);
+            if (existing != null) {
+                if (!existing.isFile() || !existing.canWrite())
+                    throw new Exception("El archivo existente no se puede sobrescribir");
+                new AlertDialog.Builder(this)
+                    .setTitle("Actualizar lista exportada")
+                    .setMessage("Ya existe «" + name + "». ¿Quieres sustituirlo por la versión actual de tu lista? Las canciones nuevas se incluirán en el mismo archivo.")
+                    .setNegativeButton("Cancelar", (dialog, which) -> {
+                        // No modificar el archivo existente.
+                        personalExportContent = null;
+                        personalExportFile = null;
+                        personalExportMime = null;
+                    })
+                    .setPositiveButton("Actualizar", (dialog, which) ->
+                            personalFinishExport(dir, existing, name))
+                    .show();
+            } else {
+                personalFinishExport(dir, null, name);
             }
-            DocumentFile document = dir.createFile(personalExportMime, name);
-            if (document == null) throw new Exception("No se pudo crear archivo");
-            try (OutputStream stream = getContentResolver().openOutputStream(document.getUri(), "w")) {
+        } catch (Exception e) {
+            Toast.makeText(this, "Error exportando: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void personalFinishExport(DocumentFile dir, DocumentFile existing, String name) {
+        try {
+            if (personalExportContent == null || personalExportFile == null)
+                throw new Exception("No hay exportación pendiente");
+            DocumentFile destination = existing;
+            if (destination == null) {
+                destination = dir.createFile(personalExportMime, name);
+                if (destination == null) throw new Exception("No se pudo crear archivo");
+            }
+            // 'wt' trunca el archivo actual: no concatena registros repetidos.
+            try (OutputStream stream = getContentResolver()
+                    .openOutputStream(destination.getUri(), "wt")) {
                 if (stream == null) throw new Exception("No se pudo abrir archivo");
-                stream.write(personalExportContent.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                stream.write(personalExportContent.getBytes(
+                        java.nio.charset.StandardCharsets.UTF_8));
+                stream.flush();
             }
             personalExportContent = null;
             personalExportFile = null;
             personalExportMime = null;
-            Toast.makeText(this, "Lista exportada a la carpeta de listas", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Lista exportada: " + name,
+                    Toast.LENGTH_LONG).show();
         } catch (Exception e) {
-            Toast.makeText(this, "Error exportando: " + e.getMessage()
-                    + ". Elige otra carpeta de listas.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Error guardando lista: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
         }
     }
 
@@ -15371,6 +15405,8 @@ Toast.makeText(
             }).setNegativeButton("Cerrar",null).show();
     }
 
+    // PERSONAL_DELETE_ALL_FORMATS_V2
+    // Borra los archivos exportados .csv / .txt / .json y después la lista local.
     private void personalConfirmDeleteList(String id) {
         JSONObject current = PersonalPlaylists.get(this, id);
         if (current == null) {
@@ -15378,20 +15414,85 @@ Toast.makeText(
             return;
         }
         String name = current.optString("name", "Lista");
+        String safeName = name.replaceAll("[\\\\/:*?\"<>|]", "_");
+
+        // Dos listas pueden generar el mismo nombre de archivo, incluso si
+        // sus nombres originales varían solo en caracteres prohibidos.
+        JSONArray lists = PersonalPlaylists.load(this);
+        boolean shared = false;
+        for (int i = 0; i < lists.length(); i++) {
+            JSONObject other = lists.optJSONObject(i);
+            if (other == null || id.equals(other.optString("id"))) continue;
+            String otherFile = other.optString("name", "Lista")
+                    .replaceAll("[\\\\/:*?\"<>|]", "_");
+            if (safeName.equalsIgnoreCase(otherFile)) {
+                shared = true;
+                break;
+            }
+        }
+        final boolean sharedName = shared;
+        final java.util.ArrayList<DocumentFile> files = new java.util.ArrayList<>();
+        String folderUri = getSharedPreferences("settings", MODE_PRIVATE)
+                .getString(PERSONAL_FOLDER_PREF, "");
+        if (!sharedName) {
+            if (folderUri.isEmpty()) {
+                Toast.makeText(this,
+                        "No hay carpeta de listas configurada: no se ha eliminado nada",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+            try {
+                DocumentFile dir = DocumentFile.fromTreeUri(this, Uri.parse(folderUri));
+                if (dir == null || !dir.isDirectory() || !dir.canRead())
+                    throw new Exception("Carpeta de listas inaccesible");
+                for (String ext : new String[]{"csv", "txt", "json"}) {
+                    DocumentFile file = dir.findFile(safeName + "." + ext);
+                    if (file != null) {
+                        if (!file.isFile() || !file.canWrite())
+                            throw new Exception("No se puede borrar «" + safeName + "." + ext + "»");
+                        files.add(file);
+                    }
+                }
+            } catch (Exception e) {
+                Toast.makeText(this, "No se ha eliminado nada: " + e.getMessage(),
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+        }
+        String explanation = "¿Eliminar definitivamente «" + name + "»?";
+        if (sharedName) {
+            explanation += "\n\nOtra lista usa el mismo nombre de archivo. "
+                    + "Se eliminará esta lista, pero se conservarán los archivos compartidos.";
+        } else {
+            explanation += "\n\nTambién se borrarán " + files.size()
+                    + " exportaciones encontradas (CSV, TXT y JSON) en la carpeta configurada.";
+        }
+        explanation += "\n\nLos archivos de audio Offline y las playlists importadas "
+                + "en Spotify no se modificarán.";
         new AlertDialog.Builder(this)
-            .setTitle("Eliminar lista personalizada")
-            .setMessage("¿Eliminar definitivamente «" + name + "»?\n\n" +
-                "Se borrará esta lista y sus referencias a canciones. " +
-                "Los archivos de música y las listas importadas de Spotify no se tocarán.")
+            .setTitle("Eliminar lista y exportaciones")
+            .setMessage(explanation)
             .setNegativeButton("Cancelar", null)
             .setPositiveButton("Eliminar", (dialog, which) -> {
                 try {
+                    if (!sharedName) {
+                        for (DocumentFile file : files) {
+                            if (!file.delete()) {
+                                Toast.makeText(this,
+                                        "No se pudo borrar un archivo. La lista local se conserva; "
+                                                + "revisa la carpeta de exportación.",
+                                        Toast.LENGTH_LONG).show();
+                                return;
+                            }
+                        }
+                    }
                     PersonalPlaylists.deleteList(this, id);
-                    Toast.makeText(this, "Lista eliminada", Toast.LENGTH_SHORT).show();
-                    // Refrescar para que no aparezca la lista borrada.
+                    Toast.makeText(this, "Lista y exportaciones eliminadas",
+                            Toast.LENGTH_SHORT).show();
                     if (PersonalPlaylists.load(this).length() > 0) personalShowLists();
                 } catch (Exception e) {
-                    Toast.makeText(this, "Error al borrar: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, "Error al eliminar: " + e.getMessage(),
+                            Toast.LENGTH_LONG).show();
                 }
             }).show();
     }
@@ -15801,22 +15902,92 @@ Toast.makeText(
                 songs.put(personalFromSpotify(spotifySelectionTracks.get(i)));
         personalChooseListForSongs(songs);
     }
+    // FIX_FAVORITOS_LISTAS_ALBUM_DURACION_V1
+    // Los Favoritos de álbum almacenan albumId, no necesariamente tracks.
+    // Los Favoritos de canción suelen guardar duración en milisegundos;
+    // PersonalPlaylists espera segundos.
+    private int personalFavoriteSeconds(long value) {
+        if (value <= 0L) return 0;
+        // Los tiempos normales de Favoritos vienen como 251000 ms (4:11).
+        // Las duraciones expresadas como segundos se conservan.
+        long seconds = value >= 10000L ? value / 1000L : value;
+        return (int) Math.min(Integer.MAX_VALUE, seconds);
+    }
+
+    private JSONObject personalFavoriteSong(JSONObject t) {
+        JSONObject result = personalSong(
+                t.optString("title"), t.optString("artist"),
+                t.optString("album"), personalFavoriteSeconds(t.optLong("duration", 0L)),
+                t.optString("uri", ""));
+        try {
+            result.put("thumbnail", t.optString("thumbnail", ""));
+            result.put("thumbnailLocal", t.optString("thumbnailLocal", ""));
+            result.put("videoId", t.optString("videoId", ""));
+        } catch (Exception ignored) { }
+        return result;
+    }
+
     private void personalAddSelectedFavorites() {
-        JSONArray songs=new JSONArray();
-        for(CheckBox check:favoriteSelectionChecks) {
-            if(!check.isChecked() || !(check.getTag() instanceof JSONObject)) continue;
-            JSONObject t=(JSONObject)check.getTag();
-            if("album".equals(t.optString("type"))) {
-                JSONArray albumTracks=t.optJSONArray("tracks");
-                if(albumTracks!=null) for(int i=0;i<albumTracks.length();i++) {
-                    JSONObject x=albumTracks.optJSONObject(i);
-                    if(x!=null) songs.put(personalSong(x.optString("title"),x.optString("artist",t.optString("artist")),
-                        x.optString("album",t.optString("title")),x.optInt("duration"),""));
-                }
-            } else songs.put(personalSong(t.optString("title"),t.optString("artist"),
-                t.optString("album"),t.optInt("duration"),""));
+        final JSONArray songs = new JSONArray();
+        final java.util.ArrayList<JSONObject> albums = new java.util.ArrayList<>();
+        // Recogemos selecciones en el hilo UI antes de cargar ningún álbum.
+        for (CheckBox check : favoriteSelectionChecks) {
+            if (!check.isChecked() || !(check.getTag() instanceof JSONObject)) continue;
+            JSONObject item = (JSONObject) check.getTag();
+            if ("album".equals(item.optString("type"))) {
+                albums.add(item);
+            } else {
+                songs.put(personalFavoriteSong(item));
+            }
         }
-        personalChooseListForSongs(songs);
+        if (songs.length() == 0 && albums.isEmpty()) {
+            Toast.makeText(this, "No hay canciones seleccionadas", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (albums.isEmpty()) {
+            personalChooseListForSongs(songs);
+            return;
+        }
+        Toast.makeText(this, "Cargando pistas de álbumes favoritos...", Toast.LENGTH_SHORT).show();
+        executor.execute(() -> {
+            final JSONArray complete = new JSONArray();
+            // Mantener las canciones sueltas seleccionadas.
+            for (int i = 0; i < songs.length(); i++) complete.put(songs.opt(i));
+            int failed = 0;
+            for (JSONObject favorite : albums) {
+                String albumId = favorite.optString("albumId", "").trim();
+                if (albumId.isEmpty()) { failed++; continue; }
+                try {
+                    ApiClient.Album album = getFavoriteAlbumWithRetry(albumId);
+                    if (album == null || album.tracks == null || album.tracks.isEmpty()) {
+                        failed++;
+                        continue;
+                    }
+                    for (ApiClient.Song track : album.tracks) {
+                        if (track == null || track.title == null || track.title.trim().isEmpty()) continue;
+                        JSONObject song = personalFromSong(track);
+                        try {
+                            if (song.optString("artist").isEmpty())
+                                song.put("artist", favorite.optString("artist"));
+                            if (song.optString("album").isEmpty())
+                                song.put("album", favorite.optString("title"));
+                            if (song.optString("thumbnail").isEmpty())
+                                song.put("thumbnail", favorite.optString("thumbnail"));
+                        } catch (Exception ignored) { }
+                        complete.put(song);
+                    }
+                } catch (Exception error) {
+                    failed++;
+                    android.util.Log.w("PersonalPlaylists", "No se pudo cargar álbum favorito " + albumId, error);
+                }
+            }
+            final int failedAlbums = failed;
+            handler.post(() -> {
+                if (failedAlbums > 0) Toast.makeText(this,
+                        failedAlbums + " álbum(es) no se pudieron cargar", Toast.LENGTH_LONG).show();
+                personalChooseListForSongs(complete);
+            });
+        });
     }
 
     private void personalChooseExport(JSONObject list) {
