@@ -2,7 +2,31 @@ plugins {
     id 'com.android.application'
 }
 
+// MUSICDOWNLOADER_RELEASE_SIGNING_V1
+def musicSigningFile = file(
+    '/home/fran/MusicDownloader-clave-maestra/signing.json'
+)
+
+if (!musicSigningFile.isFile()) {
+    throw new GradleException(
+        'Falta la configuración privada de firma.'
+    )
+}
+
+def musicSigning =
+    new groovy.json.JsonSlurper()
+        .parse(musicSigningFile)
+
 android {
+    signingConfigs {
+        release {
+            storeFile file(musicSigning.storeFile)
+            storePassword musicSigning.storePassword
+            keyAlias musicSigning.keyAlias
+            keyPassword musicSigning.keyPassword
+        }
+    }
+
     namespace 'com.musicdownloader.app'
     compileSdk 35
 
@@ -12,6 +36,12 @@ android {
         targetSdk 35
         versionCode 1
         versionName '1.0'
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+        }
     }
 }
 

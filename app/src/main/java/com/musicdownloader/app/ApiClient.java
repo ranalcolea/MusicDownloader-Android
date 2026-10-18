@@ -22,6 +22,45 @@ public class ApiClient {
         this.baseUrl = baseUrl.replaceAll("/+$", "");
     }
 
+
+    // SUGERENCIAS_REMOTAS_V2
+    public org.json.JSONArray searchSuggestions(
+            String query) throws Exception {
+
+        String encoded = java.net.URLEncoder.encode(
+                query, "UTF-8");
+
+        java.net.HttpURLConnection conn =
+                (java.net.HttpURLConnection)
+                new java.net.URL(
+                        baseUrl + "/api/suggest?q=" + encoded
+                ).openConnection();
+
+        try {
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(2500);
+            conn.setReadTimeout(2500);
+            conn.setRequestProperty(
+                    "Accept", "application/json");
+
+            if (conn.getResponseCode() != 200) {
+                return new org.json.JSONArray();
+            }
+
+            String response =
+                    readResponse(conn.getInputStream());
+
+            return new org.json.JSONObject(response)
+                    .optJSONArray("suggestions") != null
+                    ? new org.json.JSONObject(response)
+                        .getJSONArray("suggestions")
+                    : new org.json.JSONArray();
+
+        } finally {
+            conn.disconnect();
+        }
+    }
+
     private String get(String path) throws Exception {
         URL url = new URL(baseUrl + path);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -146,13 +185,22 @@ public class ApiClient {
 
     public List<Song> searchSongs(
             String query) throws Exception {
+        return searchSongs(query, 100);
+    }
+
+    // BUSQUEDA_PROGRESIVA_ANDROID_V1
+    public List<Song> searchSongs(
+            String query, int limit) throws Exception {
+
+        limit = Math.max(1, Math.min(100, limit));
 
         String encoded =
                 URLEncoder.encode(query, "UTF-8");
 
         JSONObject json =
                 new JSONObject(
-                        get("/api/search?q=" + encoded)
+                        get("/api/search?q=" + encoded
+                                + "&limit=" + limit)
                 );
 
         JSONArray results =
@@ -174,6 +222,9 @@ public class ApiClient {
 
             song.id =
                     item.optString("id");
+
+            song.videoId =
+                    song.id;
 
             song.title =
                     item.optString("title");
@@ -270,6 +321,12 @@ public class ApiClient {
         album.artist =
                 json.optString("artist");
 
+        album.albumType =
+                json.optString(
+                        "album_type",
+                        "studio"
+                );
+
         JSONArray tracks =
                 json.optJSONArray("tracks");
 
@@ -302,6 +359,9 @@ public class ApiClient {
                 song.album =
                         item.optString("album");
 
+                song.albumType =
+                        album.albumType;
+
                 song.id =
                         item.optString("id");
 
@@ -328,6 +388,21 @@ public class ApiClient {
             String artist,
             String title) throws Exception {
 
+        return resolveAlbumTrack(
+                artist,
+                title,
+                "",
+                ""
+        );
+    }
+
+
+    public Song resolveAlbumTrack(
+            String artist,
+            String title,
+            String albumTitle,
+            String albumType) throws Exception {
+
         String query =
                 artist + " - " + title;
 
@@ -337,12 +412,45 @@ public class ApiClient {
                         "UTF-8"
                 );
 
+        StringBuilder path =
+                new StringBuilder(
+                        "/api/album-track?q="
+                                + encoded
+                );
+
+        if (
+                albumTitle != null &&
+                !albumTitle.trim().isEmpty()
+        ) {
+
+            path.append(
+                    "&album="
+            ).append(
+                    URLEncoder.encode(
+                            albumTitle,
+                            "UTF-8"
+                    )
+            );
+        }
+
+        if (
+                albumType != null &&
+                !albumType.trim().isEmpty()
+        ) {
+
+            path.append(
+                    "&album_type="
+            ).append(
+                    URLEncoder.encode(
+                            albumType,
+                            "UTF-8"
+                    )
+            );
+        }
+
         JSONObject json =
                 new JSONObject(
-                        get(
-                                "/api/album-track?q="
-                                        + encoded
-                        )
+                        get(path.toString())
                 );
 
         Song song = new Song();
@@ -371,8 +479,42 @@ public class ApiClient {
         song.artist =
                 artist;
 
+        song.album =
+                albumTitle == null
+                        ? ""
+                        : albumTitle;
+
+        song.albumType =
+                albumType == null
+                        ? ""
+                        : albumType;
+
         return song;
     }
+
+
+    public String getAudioUrl(
+            String videoId) throws Exception {
+
+        if (videoId == null ||
+                videoId.trim().isEmpty()) {
+
+            throw new Exception(
+                    "ID de audio vacío"
+            );
+        }
+
+        String encoded =
+                URLEncoder.encode(
+                        videoId.trim(),
+                        "UTF-8"
+                );
+
+        return baseUrl
+                + "/api/audio?id="
+                + encoded;
+    }
+
 
     public String getPreviewUrl(
             String videoId) throws Exception {
@@ -1213,6 +1355,7 @@ public class ApiClient {
         public String artist = "";
         public String channel = "";
         public String album = "";
+        public String albumType = "";
         public String thumbnail = "";
         public int duration;
     }
@@ -1224,6 +1367,7 @@ public class ApiClient {
         public String artist = "";
         public String date = "";
         public String type = "";
+        public String albumType = "studio";
 
         public List<Song> tracks =
                 new ArrayList<>();
