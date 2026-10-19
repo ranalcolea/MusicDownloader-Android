@@ -190,7 +190,7 @@ public class MainActivity extends android.app.Activity {
     // LASTFM_FOTOS_TARJETAS_V1
     private LinearLayout relatedArtistsSection;
     private LinearLayout relatedArtistsRow;
-    private int relatedArtistsGeneration = 0;
+    private volatile int relatedArtistsGeneration = 0;
 
     // BUSCADOR_INTELIGENTE_V2
     private LinearLayout smartSuggestions;
@@ -505,6 +505,23 @@ private boolean playerMinimized = false;
     // Portadas de Albumes y Spotify: no bloquean consultas musicales.
     private final ExecutorService artworkExecutor =
             Executors.newFixedThreadPool(4);
+
+    // COLAS_PORTADAS_SEPARADAS_V1
+    // Una busqueda de albumes no bloquea las imagenes de Spotify.
+    private final ExecutorService albumCoverExecutor =
+            Executors.newFixedThreadPool(3);
+    private final ExecutorService spotifyCoverExecutor =
+            Executors.newFixedThreadPool(3);
+    // Consultar el contenido de una lista no ocupa los hilos de imagen.
+    private final ExecutorService spotifyHeaderLookupExecutor =
+            Executors.newFixedThreadPool(2);
+
+    // HILOS_ARTISTAS_RELACIONADOS_V1
+    private final ExecutorService relatedSearchExecutor =
+            Executors.newFixedThreadPool(1);
+
+    private final ExecutorService relatedPhotoExecutor =
+            Executors.newFixedThreadPool(3);
 
     private final Handler handler =
             new Handler(Looper.getMainLooper());
@@ -8584,6 +8601,7 @@ private void saveServerUrl() {
         }
 
         final String url = photoUrl.trim();
+        final int generation = relatedArtistsGeneration;
 
         // DIAGNOSTICO_FOTOS_ARTISTAS_V2
         android.util.Log.i(
@@ -8606,11 +8624,15 @@ private void saveServerUrl() {
         }
 
         // Independiente del executor de reproducción.
-        artworkExecutor.execute(() -> {
+        relatedPhotoExecutor.execute(() -> {
+
+            if (generation != relatedArtistsGeneration) return;
 
             Bitmap bitmap = null;
 
             for (int attempt = 0; attempt < 2; attempt++) {
+
+                if (generation != relatedArtistsGeneration) return;
 
                 java.net.HttpURLConnection connection = null;
 
@@ -8656,6 +8678,8 @@ private void saveServerUrl() {
                                 );
                     }
 
+                    if (generation != relatedArtistsGeneration) return;
+
                     if (bitmap != null) {
                         relatedArtistPhotoCache.put(
                                 url, bitmap
@@ -8685,7 +8709,8 @@ private void saveServerUrl() {
 
             handler.post(() -> {
 
-                if (!url.equals(imageView.getTag())) {
+                if (generation != relatedArtistsGeneration ||
+                        !url.equals(imageView.getTag())) {
                     return;
                 }
 
@@ -8709,6 +8734,14 @@ private void saveServerUrl() {
 
     private void hideRelatedArtists() {
         ++relatedArtistsGeneration;
+
+        // PETICIONES_ARTISTAS_ACTUALES_V1
+        // Eliminar trabajos que aún no han comenzado.
+        ((java.util.concurrent.ThreadPoolExecutor)
+                relatedSearchExecutor).getQueue().clear();
+
+        ((java.util.concurrent.ThreadPoolExecutor)
+                relatedPhotoExecutor).getQueue().clear();
 
         if (relatedArtistsSection != null) {
             relatedArtistsSection.setVisibility(View.GONE);
@@ -8735,8 +8768,10 @@ private void saveServerUrl() {
 
         if (server.isEmpty()) return;
 
-        // Executor de imágenes independiente de reproducción.
-        artworkExecutor.execute(() -> {
+        // Executor exclusivo de búsqueda de artistas relacionados.
+        relatedSearchExecutor.execute(() -> {
+
+            if (generation != relatedArtistsGeneration) return;
 
             java.net.HttpURLConnection connection = null;
             final java.util.ArrayList<String[]> artists =
@@ -8759,6 +8794,8 @@ private void saveServerUrl() {
                 connection.setConnectTimeout(6000);
                 connection.setReadTimeout(18000);
 
+                if (generation != relatedArtistsGeneration) return;
+
                 if (connection.getResponseCode() != 200) return;
 
                 StringBuilder result = new StringBuilder();
@@ -8774,6 +8811,7 @@ private void saveServerUrl() {
                 ) {
                     String line;
                     while ((line = reader.readLine()) != null) {
+                        if (generation != relatedArtistsGeneration) return;
                         result.append(line);
                     }
                 }
@@ -9957,6 +9995,16 @@ private void loadAlbumArtworkWithFallback(
         String artist,
         String title,
         ImageView imageView) {
+    loadAlbumArtworkWithFallback(originalUrl, artist, title,
+            imageView, albumCoverExecutor);
+}
+
+private void loadAlbumArtworkWithFallback(
+        String originalUrl,
+        String artist,
+        String title,
+        ImageView imageView,
+        ExecutorService coverExecutor) {
 
     final String key =
             String.valueOf(originalUrl) + "\n" +
@@ -10002,7 +10050,7 @@ private void loadAlbumArtworkWithFallback(
             android.R.drawable.ic_menu_gallery
     );
 
-    artworkExecutor.execute(() -> {
+    coverExecutor.execute(() -> {
 
         /*
          * Primero recuperar imagen local.
@@ -10113,7 +10161,7 @@ private void loadAlbumThumbnail(
                 android.R.drawable.ic_media_play
         );
 
-        artworkExecutor.execute(() -> {
+        albumCoverExecutor.execute(() -> {
 
             Bitmap bitmap = null;
 
@@ -10303,7 +10351,7 @@ private void loadSpotifyArtworkWithFallback(
     final Object requestKey = new Object();
     imageView.setTag(requestKey);
 
-    artworkExecutor.execute(() -> {
+    spotifyCoverExecutor.execute(() -> {
 
         Bitmap bitmap =
                 downloadSpotifyArtworkBitmap(originalUrl);
@@ -16307,6 +16355,44 @@ exportifyButton.setOnLongClickListener(v -> {
      * Solo se cachean los datos básicos de las listas. Las pistas
      * siguen cargándose desde el servidor cuando se abre una lista.
      */
+    // SPOTIFY_HEADER_FAST_V1: metadatos de la portada, por ID y cantidad de pistas.
+    private static final String SPOTIFY_HEADER_CACHE = "spotify_header_first_track_v1";
+
+    private ApiClient.SpotifyTrack spotifyCachedHeader(ApiClient.SpotifyPlaylist p) {
+        if (p == null || p.id == null || p.id.isEmpty()) return null;
+        try {
+            String json = getSharedPreferences("music_downloader", MODE_PRIVATE)
+                    .getString(SPOTIFY_HEADER_CACHE, "{}");
+            JSONObject data = new JSONObject(json).optJSONObject(p.id);
+            if (data == null || data.optInt("count", -1) != p.trackCount) return null;
+            ApiClient.SpotifyTrack track = new ApiClient.SpotifyTrack();
+            track.thumbnail = data.optString("thumbnail", "");
+            track.artist = data.optString("artist", "");
+            track.title = data.optString("title", "");
+            if (track.thumbnail.isEmpty() && track.title.isEmpty()) return null;
+            return track;
+        } catch (Exception ignored) { return null; }
+    }
+
+    private void spotifySaveHeader(ApiClient.SpotifyPlaylist p,
+                                   ApiClient.SpotifyTrack t) {
+        if (p == null || p.id == null || p.id.isEmpty() || t == null) return;
+        try {
+            android.content.SharedPreferences prefs =
+                    getSharedPreferences("music_downloader", MODE_PRIVATE);
+            JSONObject all = new JSONObject(prefs.getString(SPOTIFY_HEADER_CACHE, "{}"));
+            JSONObject data = new JSONObject();
+            data.put("count", p.trackCount);
+            data.put("thumbnail", t.thumbnail == null ? "" : t.thumbnail);
+            data.put("artist", t.artist == null ? "" : t.artist);
+            data.put("title", t.title == null ? "" : t.title);
+            all.put(p.id, data);
+            prefs.edit().putString(SPOTIFY_HEADER_CACHE, all.toString()).apply();
+        } catch (Exception e) {
+            Log.w("MusicDownloaderSpotify", "Error guardando portada de lista", e);
+        }
+    }
+
     private static final String SPOTIFY_LISTS_CACHE =
             "spotify_saved_lists_cache";
 
@@ -16492,9 +16578,24 @@ exportifyButton.setOnLongClickListener(v -> {
 
                 saveSpotifyListsCache(lists);
 
-                handler.post(
-                        () -> showSpotifyLists(lists)
-                );
+                handler.post(() -> {
+                    // Evitar reconstruir las mismas tarjetas cuando llega el servidor.
+                    boolean same = cachedLists != null
+                            && cachedLists.size() == lists.size();
+                    if (same) {
+                        for (int i = 0; i < lists.size(); i++) {
+                            ApiClient.SpotifyPlaylist a = cachedLists.get(i);
+                            ApiClient.SpotifyPlaylist b = lists.get(i);
+                            if (!java.util.Objects.equals(a.id, b.id)
+                                    || !java.util.Objects.equals(a.name, b.name)
+                                    || a.trackCount != b.trackCount) {
+                                same = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (!same) showSpotifyLists(lists);
+                });
 
             } catch (Exception e) {
 
@@ -17114,38 +17215,32 @@ fileButton.setText("📂 Archivo");
                         card, cardParams
                 );
 
-                // Obtener portada de la primera canción
-                // en segundo plano, sin bloquear la interfaz.
-                artworkExecutor.execute(() -> {
-                    try {
-                        ApiClient.SpotifyPlaylist detail =
-                                api().loadSpotifyList(playlist.id);
-
-                        if (detail.tracks == null ||
-                                detail.tracks.isEmpty()) {
-                            return;
+                // SPOTIFY_HEADER_FAST_V1: primera pista cacheada localmente.
+                ApiClient.SpotifyTrack cachedHeader = spotifyCachedHeader(playlist);
+                if (cachedHeader != null) {
+                    loadAlbumArtworkWithFallback(cachedHeader.thumbnail,
+                            cachedHeader.artist, cachedHeader.title, cover, spotifyCoverExecutor);
+                } else {
+                    // Únicamente las listas no cacheadas consultan sus pistas.
+                    spotifyHeaderLookupExecutor.execute(() -> {
+                        try {
+                            ApiClient.SpotifyPlaylist detail =
+                                    api().loadSpotifyList(playlist.id);
+                            if (detail.tracks == null || detail.tracks.isEmpty()) return;
+                            ApiClient.SpotifyTrack first = detail.tracks.get(0);
+                            handler.post(() -> {
+                                spotifySaveHeader(playlist, first);
+                                if (cover.getParent() != null && cover.isAttachedToWindow()) {
+                                    loadAlbumArtworkWithFallback(first.thumbnail,
+                                            first.artist, first.title, cover, spotifyCoverExecutor);
+                                }
+                            });
+                        } catch (Exception e) {
+                            Log.w("MusicDownloaderSpotify",
+                                    "Portada no disponible: " + playlist.name, e);
                         }
-
-                        ApiClient.SpotifyTrack first =
-                                detail.tracks.get(0);
-
-                        handler.post(() -> {
-                            if (cover.getParent() != null) {
-                                loadSpotifyThumbnail(
-                                        first, cover
-                                );
-                            }
-                        });
-
-                    } catch (Exception e) {
-                        Log.w(
-                                "MusicDownloaderSpotify",
-                                "Portada no disponible: "
-                                        + playlist.name,
-                                e
-                        );
-                    }
-                });
+                    });
+                }
             }
         }
 
@@ -24502,6 +24597,11 @@ private void updatePlayerUi() {
 
         executor.shutdownNow();
         artworkExecutor.shutdownNow();
+        albumCoverExecutor.shutdownNow();
+        spotifyCoverExecutor.shutdownNow();
+        spotifyHeaderLookupExecutor.shutdownNow();
+        relatedSearchExecutor.shutdownNow();
+        relatedPhotoExecutor.shutdownNow();
 
         if (mediaController != null) {
 
