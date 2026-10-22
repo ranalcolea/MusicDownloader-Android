@@ -26471,6 +26471,170 @@ private long getOfflineFileDuration(Uri uri) {
     }
 }
 
+
+// OFFLINE_INTELLIGENT_PANEL_V1
+// Analisis exclusivamente en memoria: no modifica archivos.
+private void addOfflineIntelligentPanel(JSONArray library) {
+
+    int songs = 0;
+    int incomplete = 0;
+    int withoutCover = 0;
+    int duplicates = 0;
+    long totalSeconds = 0L;
+    long totalBytes = 0L;
+
+    java.util.HashSet<String> artists =
+            new java.util.HashSet<>();
+    java.util.HashSet<String> albums =
+            new java.util.HashSet<>();
+    java.util.HashMap<String, Integer> matches =
+            new java.util.HashMap<>();
+
+    for (int i = 0; i < library.length(); i++) {
+
+        JSONObject item = library.optJSONObject(i);
+        if (item == null) continue;
+
+        String uri = item.optString("uri", "").trim();
+        if (uri.isEmpty()) continue;
+
+        songs++;
+
+        String title = item.optString("title", "").trim();
+        String artist = item.optString("artist", "").trim();
+        String album = item.optString("album", "").trim();
+
+        long duration = Math.max(
+                0L, item.optLong("duration", 0L));
+        long size = Math.max(
+                0L, item.optLong("size", 0L));
+
+        totalSeconds += duration;
+        totalBytes += size;
+
+        String normalizedArtist =
+                artist.toLowerCase(java.util.Locale.ROOT);
+        String normalizedTitle =
+                title.toLowerCase(java.util.Locale.ROOT);
+
+        if (!artist.isEmpty()) {
+            artists.add(normalizedArtist);
+        }
+
+        if (!album.isEmpty()) {
+            albums.add(normalizedArtist + "\n" +
+                    album.toLowerCase(java.util.Locale.ROOT));
+        }
+
+        if (title.isEmpty() || artist.isEmpty() ||
+                album.isEmpty()) {
+            incomplete++;
+        }
+
+        String cover = item.optString(
+                "thumbnailLocal", "").trim();
+
+        if (cover.isEmpty() ||
+                !new java.io.File(cover).isFile()) {
+            cover = item.optString("thumbnail", "").trim();
+        }
+
+        if (cover.isEmpty() ||
+                (!cover.startsWith("http://") &&
+                 !cover.startsWith("https://") &&
+                 !new java.io.File(cover).isFile())) {
+            withoutCover++;
+        }
+
+        // Coincidencia orientativa, no duplicado confirmado.
+        if (!normalizedArtist.isEmpty() &&
+                !normalizedTitle.isEmpty() &&
+                duration > 0) {
+
+            String key = normalizedArtist + "\n" +
+                    normalizedTitle + "\n" + duration;
+
+            int previous = matches.containsKey(key)
+                    ? matches.get(key) : 0;
+
+            if (previous >= 1) duplicates++;
+
+            matches.put(key, previous + 1);
+        }
+    }
+
+    long hours = totalSeconds / 3600L;
+    long minutes = (totalSeconds % 3600L) / 60L;
+
+    String space;
+    if (totalBytes >= 1024L * 1024L * 1024L) {
+        space = String.format(
+                java.util.Locale.getDefault(),
+                "%.2f GB",
+                totalBytes / (1024.0 * 1024.0 * 1024.0));
+    } else {
+        space = String.format(
+                java.util.Locale.getDefault(),
+                "%.1f MB",
+                totalBytes / (1024.0 * 1024.0));
+    }
+
+    Button toggle = visualButton(
+            "📊  Biblioteca inteligente  ▾");
+    toggle.setTextSize(14);
+
+    LinearLayout.LayoutParams buttonParams =
+            new LinearLayout.LayoutParams(-1, dp(46));
+    buttonParams.setMargins(
+            dp(8), dp(6), dp(8), dp(6));
+
+    contentLayout.addView(toggle, buttonParams);
+
+    TextView details = new TextView(this);
+    details.setText(
+            "🎵 Canciones: " + songs +
+            "\n👤 Artistas: " + artists.size() +
+            "\n💿 Álbumes: " + albums.size() +
+            "\n⏱ Duración: " + hours + " h " +
+                    minutes + " min" +
+            "\n💾 Espacio: " + space +
+            "\n\n🔎 ANÁLISIS" +
+            "\nPosibles duplicados: " + duplicates +
+            "\nMetadatos incompletos: " + incomplete +
+            "\nSin portada registrada: " + withoutCover +
+            "\n\nLos posibles duplicados no se eliminan."
+    );
+
+    details.setTextSize(14);
+    details.setTextColor(
+            Color.rgb(225, 225, 235));
+    details.setPadding(
+            dp(16), dp(14), dp(16), dp(14));
+    details.setBackground(
+            roundedBackground(
+                    Color.rgb(32, 32, 42),
+                    Color.rgb(75, 75, 90),
+                    16));
+
+    LinearLayout.LayoutParams detailParams =
+            new LinearLayout.LayoutParams(-1, -2);
+    detailParams.setMargins(
+            dp(8), 0, dp(8), dp(8));
+
+    contentLayout.addView(details, detailParams);
+    details.setVisibility(View.GONE);
+
+    toggle.setOnClickListener(v -> {
+        boolean opening =
+                details.getVisibility() != View.VISIBLE;
+        details.setVisibility(
+                opening ? View.VISIBLE : View.GONE);
+        toggle.setText(opening
+                ? "📊  Biblioteca inteligente  ▴"
+                : "📊  Biblioteca inteligente  ▾");
+    });
+}
+
 private void showOfflineLibrary() {
 
     if (!"offline".equals(currentScreen)) {
@@ -26634,6 +26798,9 @@ private void showOfflineLibrary() {
      * Si aparecen canciones nuevas o desaparecen canciones,
      * la biblioteca se actualiza y la pantalla se reconstruye.
      */
+    // Panel inteligente: solo lectura.
+    addOfflineIntelligentPanel(library);
+
     refreshOfflineLibraryInBackground();
 
     /*
