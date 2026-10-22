@@ -27734,8 +27734,420 @@ private void showOfflineLibrary() {
 
 
 
+
+    // OFFLINE_GROUP_CARDS_SAFE_V2
+    addOfflineGroupCards(
+            library,
+            offlineResultsContainer,
+            selectionButtons,
+            playAll,
+            addToPersonal
+    );
+
 }
 
+
+
+// OFFLINE_GROUP_CARDS_SAFE_V2
+// Vista independiente: solo lectura de offline_library.
+private void addOfflineGroupCards(
+        JSONArray library,
+        LinearLayout originalContainer,
+        LinearLayout selectionButtons,
+        Button playAll,
+        Button addToPersonal) {
+
+    // Guardar referencias a las tarjetas originales.
+    final java.util.ArrayList<View> originalViews =
+            new java.util.ArrayList<>();
+
+    for (int i = 0; i < originalContainer.getChildCount(); i++) {
+        originalViews.add(originalContainer.getChildAt(i));
+    }
+
+    LinearLayout groupedContainer = new LinearLayout(this);
+    groupedContainer.setOrientation(LinearLayout.VERTICAL);
+    groupedContainer.setVisibility(View.GONE);
+    originalContainer.addView(groupedContainer);
+
+    LinearLayout tabs = new LinearLayout(this);
+    tabs.setOrientation(LinearLayout.HORIZONTAL);
+    tabs.setPadding(dp(8), dp(5), dp(8), dp(7));
+
+    Button songsTab = visualButton("Canciones");
+    Button artistsTab = visualButton("Artistas");
+    Button albumsTab = visualButton("Álbumes");
+
+    for (Button button : new Button[]{
+            songsTab, artistsTab, albumsTab}) {
+
+        button.setAllCaps(false);
+        button.setTextSize(12);
+
+        LinearLayout.LayoutParams lp =
+                new LinearLayout.LayoutParams(0, dp(44), 1f);
+
+        lp.setMargins(dp(2), 0, dp(2), 0);
+        tabs.addView(button, lp);
+    }
+
+    // OFFLINE_ALBUMS_HIDE_UNTIL_COMPLETE_V1
+    // Ocultar hasta disponer del total real de pistas.
+    albumsTab.setVisibility(View.GONE);
+
+    // Navegación delante de los controles de selección.
+    int insertAt = contentLayout.indexOfChild(selectionButtons);
+
+    if (insertAt < 0) {
+        insertAt = contentLayout.indexOfChild(offlineResultsScroll);
+    }
+
+    contentLayout.addView(tabs, Math.max(0, insertAt));
+
+    final java.util.function.Consumer<String> changeView = mode -> {
+
+        boolean songs = "songs".equals(mode);
+
+        selectionButtons.setVisibility(
+                songs ? View.VISIBLE : View.GONE);
+        playAll.setVisibility(
+                songs ? View.VISIBLE : View.GONE);
+        addToPersonal.setVisibility(
+                songs ? View.VISIBLE : View.GONE);
+
+        for (View original : originalViews) {
+            original.setVisibility(
+                    songs ? View.VISIBLE : View.GONE);
+        }
+
+        groupedContainer.setVisibility(
+                songs ? View.GONE : View.VISIBLE);
+
+        songsTab.setAlpha(songs ? 1f : 0.55f);
+        artistsTab.setAlpha(
+                "artists".equals(mode) ? 1f : 0.55f);
+        albumsTab.setAlpha(
+                "albums".equals(mode) ? 1f : 0.55f);
+
+        groupedContainer.removeAllViews();
+
+        if (songs) {
+            offlineResultsScroll.scrollTo(0, 0);
+            return;
+        }
+
+        java.util.TreeMap<String, JSONArray> groups =
+                new java.util.TreeMap<>(
+                        String.CASE_INSENSITIVE_ORDER);
+
+        for (int i = 0; i < library.length(); i++) {
+
+            JSONObject item = library.optJSONObject(i);
+
+            if (item == null ||
+                    item.optString("uri", "").trim().isEmpty()) {
+                continue;
+            }
+
+            String artist =
+                    item.optString("artist", "").trim();
+
+            String album =
+                    item.optString("album", "").trim();
+
+            if (artist.isEmpty()) {
+                artist = "Artista desconocido";
+            }
+
+            if (album.isEmpty()) {
+                album = "Álbum desconocido";
+            }
+
+            String name = "artists".equals(mode)
+                    ? artist
+                    : artist + " · " + album;
+
+            JSONArray group = groups.get(name);
+
+            if (group == null) {
+                group = new JSONArray();
+                groups.put(name, group);
+            }
+
+            group.put(item);
+        }
+
+        for (java.util.Map.Entry<String, JSONArray> entry
+                : groups.entrySet()) {
+
+            final JSONArray group = entry.getValue();
+
+            if (group.length() == 0) continue;
+
+            JSONObject first = group.optJSONObject(0);
+            if (first == null) continue;
+
+            long totalSeconds = 0;
+
+            for (int i = 0; i < group.length(); i++) {
+                JSONObject item = group.optJSONObject(i);
+                if (item != null) {
+                    totalSeconds += Math.max(
+                            0L, item.optLong("duration", 0L));
+                }
+            }
+
+            String totalTime =
+                    (totalSeconds / 3600 > 0
+                            ? (totalSeconds / 3600) + " h "
+                            : "")
+                    + ((totalSeconds % 3600) / 60) + " min";
+
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+
+            card.setPadding(
+                    dp(12), dp(12), dp(12), dp(12));
+
+            card.setBackground(roundedBackground(
+                    Color.rgb(32, 36, 47),
+                    Color.rgb(67, 80, 99),
+                    18
+            ));
+
+            LinearLayout.LayoutParams cardParams =
+                    new LinearLayout.LayoutParams(-1, -2);
+
+            cardParams.setMargins(
+                    dp(8), dp(6), dp(8), dp(6));
+
+            groupedContainer.addView(card, cardParams);
+
+            // Cabecera completa pulsable.
+            LinearLayout header = new LinearLayout(this);
+            header.setOrientation(LinearLayout.HORIZONTAL);
+            header.setGravity(Gravity.CENTER_VERTICAL);
+            card.addView(header);
+
+            ImageView cover = new ImageView(this);
+            cover.setScaleType(
+                    ImageView.ScaleType.CENTER_CROP);
+
+            LinearLayout.LayoutParams coverParams =
+                    new LinearLayout.LayoutParams(
+                            dp(86), dp(86));
+
+            coverParams.setMargins(
+                    0, 0, dp(12), 0);
+
+            header.addView(cover, coverParams);
+
+            String thumbnail = first.optString(
+                    "thumbnailLocal", "").trim();
+
+            if (thumbnail.isEmpty() ||
+                    !new java.io.File(thumbnail).isFile()) {
+                thumbnail = first.optString(
+                        "thumbnail", "");
+            }
+
+            loadOfflineThumbnail(
+                    thumbnail,
+                    first.optString("videoId", ""),
+                    Uri.parse(first.optString("uri", "")),
+                    cover
+            );
+
+            LinearLayout info = new LinearLayout(this);
+            info.setOrientation(LinearLayout.VERTICAL);
+
+            header.addView(info,
+                    new LinearLayout.LayoutParams(
+                            0, -2, 1f));
+
+            TextView heading = new TextView(this);
+            heading.setText(entry.getKey());
+            heading.setTextColor(Color.WHITE);
+            heading.setTextSize(16);
+            heading.setTypeface(
+                    null, android.graphics.Typeface.BOLD);
+            heading.setMaxLines(2);
+            heading.setEllipsize(
+                    android.text.TextUtils.TruncateAt.END);
+            info.addView(heading);
+
+            TextView subtitle = new TextView(this);
+            subtitle.setText(
+                    group.length() + " canciones"
+                            + "  ·  " + totalTime);
+            subtitle.setTextSize(12);
+            subtitle.setTextColor(
+                    Color.rgb(174, 189, 207));
+            subtitle.setPadding(
+                    0, dp(7), 0, 0);
+            info.addView(subtitle);
+
+            TextView hint = new TextView(this);
+            hint.setText("Tocar para abrir  ▾");
+            hint.setTextSize(12);
+            hint.setTextColor(
+                    Color.rgb(103, 218, 178));
+            hint.setPadding(
+                    0, dp(8), 0, 0);
+            info.addView(hint);
+
+            LinearLayout expanded = new LinearLayout(this);
+            expanded.setOrientation(LinearLayout.VERTICAL);
+            expanded.setVisibility(View.GONE);
+            card.addView(expanded);
+
+            header.setOnClickListener(v -> {
+                boolean open =
+                        expanded.getVisibility() != View.VISIBLE;
+                expanded.setVisibility(
+                        open ? View.VISIBLE : View.GONE);
+                hint.setText(open
+                        ? "Tocar para cerrar  ▴"
+                        : "Tocar para abrir  ▾");
+            });
+
+            Button playGroup =
+                    visualButton("▶  Reproducir grupo");
+
+            LinearLayout.LayoutParams groupPlayParams =
+                    new LinearLayout.LayoutParams(
+                            -1, dp(44));
+            groupPlayParams.topMargin = dp(12);
+
+            expanded.addView(
+                    playGroup, groupPlayParams);
+
+            playGroup.setOnClickListener(
+                    v -> playOfflineLibrary(group));
+
+            for (int i = 0; i < group.length(); i++) {
+
+                JSONObject item = group.optJSONObject(i);
+                if (item == null) continue;
+
+                final int songIndex = i;
+
+                LinearLayout trackRow =
+                        new LinearLayout(this);
+
+                trackRow.setOrientation(
+                        LinearLayout.HORIZONTAL);
+                trackRow.setGravity(
+                        Gravity.CENTER_VERTICAL);
+                trackRow.setPadding(
+                        dp(3), dp(9), dp(3), dp(9));
+
+                expanded.addView(trackRow);
+
+                ImageView trackCover = new ImageView(this);
+                trackCover.setScaleType(
+                        ImageView.ScaleType.CENTER_CROP);
+
+                LinearLayout.LayoutParams trackCoverParams =
+                        new LinearLayout.LayoutParams(
+                                dp(48), dp(48));
+                trackCoverParams.rightMargin = dp(10);
+
+                trackRow.addView(
+                        trackCover, trackCoverParams);
+
+                String trackThumbnail = item.optString(
+                        "thumbnailLocal", "").trim();
+
+                if (trackThumbnail.isEmpty() ||
+                        !new java.io.File(trackThumbnail).isFile()) {
+                    trackThumbnail = item.optString(
+                            "thumbnail", "");
+                }
+
+                loadOfflineThumbnail(
+                        trackThumbnail,
+                        item.optString("videoId", ""),
+                        Uri.parse(item.optString("uri", "")),
+                        trackCover
+                );
+
+                LinearLayout trackInfo =
+                        new LinearLayout(this);
+                trackInfo.setOrientation(
+                        LinearLayout.VERTICAL);
+
+                trackRow.addView(
+                        trackInfo,
+                        new LinearLayout.LayoutParams(
+                                0, -2, 1f));
+
+                TextView trackTitle =
+                        new TextView(this);
+                trackTitle.setText(
+                        item.optString("title", "Canción"));
+                trackTitle.setTextColor(Color.WHITE);
+                trackTitle.setTextSize(14);
+                trackTitle.setMaxLines(2);
+                trackInfo.addView(trackTitle);
+
+                TextView trackArtist =
+                        new TextView(this);
+                trackArtist.setText(
+                        item.optString("artist", ""));
+                trackArtist.setTextColor(
+                        Color.rgb(172, 185, 203));
+                trackArtist.setTextSize(12);
+                trackInfo.addView(trackArtist);
+
+                long seconds = Math.max(
+                        0L, item.optLong("duration", 0L));
+
+                TextView trackDuration =
+                        new TextView(this);
+
+                trackDuration.setText(seconds > 0
+                        ? formatTime(seconds * 1000L)
+                        : "--:--");
+
+                trackDuration.setTextColor(
+                        Color.rgb(172, 185, 203));
+                trackDuration.setTextSize(12);
+                trackDuration.setPadding(
+                        dp(8), 0, dp(8), 0);
+                trackRow.addView(trackDuration);
+
+                TextView playIcon =
+                        new TextView(this);
+                playIcon.setText("▶");
+                playIcon.setTextColor(
+                        Color.rgb(103, 218, 178));
+                playIcon.setTextSize(18);
+                trackRow.addView(playIcon);
+
+                // Misma reproducción original de Offline.
+                trackRow.setOnClickListener(v ->
+                        playOfflineLibraryFromIndex(
+                                group, songIndex));
+            }
+        }
+
+        offlineResultsScroll.post(() ->
+                offlineResultsScroll.scrollTo(0, 0));
+    };
+
+    songsTab.setOnClickListener(
+            v -> changeView.accept("songs"));
+
+    artistsTab.setOnClickListener(
+            v -> changeView.accept("artists"));
+
+    albumsTab.setOnClickListener(
+            v -> changeView.accept("albums"));
+
+    // Inicio siempre en la lista original.
+    changeView.accept("songs");
+}
 
 private static class ActiveDownloadItem {
 
