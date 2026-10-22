@@ -4469,10 +4469,21 @@ private void showFavorites() {
                     "☐ DESMARCAR"
             );
 
+    // FAVORITOS_MARCAR_TODAS_FIX_V1
+    // Seleccionar álbumes completos y canciones sueltas.
+    // No seleccionar simultáneamente el álbum y sus pistas interiores.
     selectAll.setOnClickListener(v -> {
 
         for (CheckBox check :
                 favoriteSelectionChecks) {
+
+            JSONObject favorite = (JSONObject) check.getTag();
+
+            if (favorite != null &&
+                    favorite.optBoolean("favoriteAlbumTrack", false)) {
+                check.setChecked(false);
+                continue;
+            }
 
             check.setChecked(true);
         }
@@ -5753,6 +5764,114 @@ private void addFavoriteAlbumView(
             buttonParams
     );
 
+    // FAVORITOS_ALBUM_PISTAS_DESPLEGABLES_V1
+    // Conserva los tres botones originales y añade solamente el despliegue.
+    Button toggleTracks = visualButton("▾ VER CANCIONES");
+    toggleTracks.setAllCaps(false);
+    LinearLayout tracksContainer = new LinearLayout(this);
+    tracksContainer.setOrientation(LinearLayout.VERTICAL);
+    tracksContainer.setVisibility(View.GONE);
+    final java.util.ArrayList<CheckBox> albumTrackChecks = new java.util.ArrayList<>();
+    final boolean[] tracksLoaded = {false};
+    final boolean[] loading = {false};
+    select.setOnCheckedChangeListener((button, checked) -> {
+        if (checked) {
+            for (CheckBox trackCheck : albumTrackChecks) trackCheck.setChecked(false);
+        }
+    });
+    toggleTracks.setOnClickListener(view -> {
+        if (tracksContainer.getVisibility() == View.VISIBLE) {
+            tracksContainer.setVisibility(View.GONE);
+            toggleTracks.setText("▾ VER CANCIONES");
+            return;
+        }
+        tracksContainer.setVisibility(View.VISIBLE);
+        toggleTracks.setText("▴ OCULTAR CANCIONES");
+        if (tracksLoaded[0] || loading[0]) return;
+        String albumId = item.optString("albumId", "").trim();
+        if (albumId.isEmpty()) {
+            TextView warning = new TextView(this);
+            warning.setText("No se encontró el identificador del álbum");
+            tracksContainer.addView(warning);
+            return;
+        }
+        loading[0] = true;
+        TextView loadingLabel = new TextView(this);
+        loadingLabel.setText("Cargando canciones del álbum...");
+        loadingLabel.setPadding(dp(8),dp(10),dp(8),dp(10));
+        tracksContainer.addView(loadingLabel);
+        executor.execute(() -> {
+            ApiClient.Album albumResult = null;
+            String error = "";
+            try { albumResult = getFavoriteAlbumWithRetry(albumId); }
+            catch (Exception ex) { error = ex.getMessage(); }
+            final ApiClient.Album loaded = albumResult;
+            final String errorFinal = error;
+            handler.post(() -> {
+                loading[0] = false;
+                if (tracksContainer.getParent() == null) return;
+                tracksContainer.removeAllViews();
+                if (loaded == null || loaded.tracks == null || loaded.tracks.isEmpty()) {
+                    TextView warning = new TextView(this);
+                    warning.setText("No se pudieron cargar las pistas" +
+                            (errorFinal.isEmpty() ? "" : ": " + errorFinal));
+                    tracksContainer.addView(warning);
+                    return;
+                }
+                tracksLoaded[0] = true;
+                int index = 0;
+                for (ApiClient.Song track : loaded.tracks) {
+                    if (track == null || track.title == null || track.title.trim().isEmpty()) continue;
+                    index++;
+                    JSONObject trackFavorite = new JSONObject();
+                    try {
+                        trackFavorite.put("type", "song");
+                        trackFavorite.put("favoriteAlbumTrack", true);
+                        trackFavorite.put("title", track.title);
+                        trackFavorite.put("artist", track.artist == null || track.artist.trim().isEmpty()
+                                ? item.optString("artist", "") : track.artist);
+                        trackFavorite.put("album", track.album == null || track.album.trim().isEmpty()
+                                ? item.optString("title", "") : track.album);
+                        trackFavorite.put("albumType", track.albumType == null ? "" : track.albumType);
+                        trackFavorite.put("thumbnail", track.thumbnail == null || track.thumbnail.isEmpty()
+                                ? item.optString("thumbnail", "") : track.thumbnail);
+                        trackFavorite.put("thumbnailLocal", item.optString("thumbnailLocal", ""));
+                        trackFavorite.put("videoId", track.videoId == null ? "" : track.videoId);
+                        trackFavorite.put("duration", track.duration);
+                    } catch (Exception ignored) { }
+                    LinearLayout row = new LinearLayout(this);
+                    row.setOrientation(LinearLayout.HORIZONTAL);
+                    row.setGravity(Gravity.CENTER_VERTICAL);
+                    CheckBox trackCheck = new CheckBox(this);
+                    trackCheck.setChecked(false);
+                    trackCheck.setTag(trackFavorite);
+                    trackCheck.setOnCheckedChangeListener((b, checked) -> {
+                        if (checked) select.setChecked(false);
+                    });
+                    albumTrackChecks.add(trackCheck);
+                    favoriteSelectionChecks.add(trackCheck);
+                    row.addView(trackCheck, new LinearLayout.LayoutParams(dp(42),dp(44)));
+                    TextView label = new TextView(this);
+                    label.setText(index + ". " + track.title +
+                            (track.duration > 0 ? "  ·  " + formatTime(track.duration * 1000L) : ""));
+                    label.setTextColor(Color.WHITE);
+                    label.setTextSize(13);
+                    row.addView(label, new LinearLayout.LayoutParams(0, dp(44), 1f));
+                    Button playTrack = visualButton("▶");
+                    playTrack.setOnClickListener(v -> playSingleFavorite(trackFavorite));
+                    row.addView(playTrack, new LinearLayout.LayoutParams(dp(46),dp(40)));
+                    Button queueTrack = visualButton("＋");
+                    queueTrack.setOnClickListener(v -> addFavoriteToExistingQueue(trackFavorite));
+                    row.addView(queueTrack, new LinearLayout.LayoutParams(dp(46),dp(40)));
+                    tracksContainer.addView(row);
+                }
+            });
+        });
+    });
+    card.addView(toggleTracks, new LinearLayout.LayoutParams(-1, dp(40)));
+    card.addView(tracksContainer);
+
+
     LinearLayout.LayoutParams cardParams =
             new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
@@ -5828,6 +5947,11 @@ private void addFavoriteToExistingQueue(JSONObject favorite) {
                 String url;
                 if (!uri.isEmpty()) {
                     url = uri;
+                } else if (favorite.optBoolean("favoriteAlbumTrack", false)) {
+                    AlbumResolvedTrack resolved = resolveAlbumTrackWithRetry(
+                            artist, title, album, favorite.optString("albumType", ""));
+                    url = resolved.url;
+                    videoId = resolved.resolved.id;
                 } else if (!spotifyId.isEmpty()) {
                     SpotifyResolvedTrack resolved = resolveSpotifyTrackWithRetry(artist, title);
                     url = resolved.url;
@@ -6465,6 +6589,13 @@ private void prepareFavoritesPlayback(
                 /*
                  * SPOTIFY
                  */
+                } else if (favorite.optBoolean("favoriteAlbumTrack", false)) {
+                    AlbumResolvedTrack resolvedResult = resolveAlbumTrackWithRetry(
+                            artist, title, album, favorite.optString("albumType", ""));
+                    readyItem = buildFavoriteMediaItem(
+                            resolvedResult.url, title, artist, album,
+                            thumbnail, resolvedResult.resolved.id,
+                            favorite.optLong("duration", 0L));
                 } else if (!spotifyId.isEmpty()) {
 
                     SpotifyResolvedTrack resolvedResult =
@@ -24028,10 +24159,59 @@ private void updatePlayerUi() {
 
                 } else if (!artwork.isEmpty()) {
 
-                    loadThumbnail(
-                            artwork,
-                            playerArtwork
-                    );
+                    // MINIPLAYER_FILE_ARTWORK_FIX_V1
+                    // Leer portadas locales file:// sin utilizar HTTP.
+                    if (artworkUri != null &&
+                            "file".equalsIgnoreCase(
+                                    artworkUri.getScheme())) {
+
+                        final String localPath =
+                                artworkUri.getPath();
+
+                        final long requestToken =
+                                playerArtworkGeneration;
+
+                        executor.execute(() -> {
+
+                            Bitmap bitmap = null;
+
+                            if (localPath != null &&
+                                    !localPath.isEmpty()) {
+                                try {
+                                    bitmap =
+                                            BitmapFactory.decodeFile(
+                                                    localPath);
+                                } catch (Exception e) {
+                                    Log.w("PLAYER_ARTWORK",
+                                            "Error leyendo portada local", e);
+                                }
+                            }
+
+                            final Bitmap result = bitmap;
+
+                            handler.post(() -> {
+
+                                if (!artworkRequestMatches(
+                                        requestToken)) {
+                                    return;
+                                }
+
+                                if (result != null) {
+                                    playerArtwork.setImageBitmap(result);
+                                } else {
+                                    playerArtwork.setImageResource(
+                                            android.R.drawable.ic_media_play);
+                                }
+                            });
+                        });
+
+                    } else {
+
+                        loadThumbnail(
+                                artwork,
+                                playerArtwork
+                        );
+                    }
 
                 } else {
 
