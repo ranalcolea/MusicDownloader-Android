@@ -25604,6 +25604,96 @@ private JSONArray scanOfflineFolder() {
                 changed = true;
             }
 
+
+            // OFFLINE_METADATA_RECOVERY_V1
+            // Recuperar campos ausentes sin sobrescribir datos correctos.
+            boolean missingArtist =
+                    item.optString("artist", "").trim().isEmpty();
+
+            boolean missingAlbum =
+                    item.optString("album", "").trim().isEmpty();
+
+            boolean missingDuration =
+                    item.optLong("duration", 0L) <= 0L;
+
+            if (missingArtist || missingAlbum || missingDuration) {
+
+                // Repetir el análisis solo si cambia el archivo o
+                // todavía no se ha comprobado esta versión.
+                long previousScanSize =
+                        item.optLong("metadata_scan_size_v1", -1L);
+
+                if (previousScanSize != currentSize) {
+
+                    android.media.MediaMetadataRetriever metadataRetriever =
+                            new android.media.MediaMetadataRetriever();
+
+                    try {
+                        metadataRetriever.setDataSource(
+                                this, currentFile.getUri());
+
+                        if (missingArtist) {
+                            String value = metadataRetriever.extractMetadata(
+                                    android.media.MediaMetadataRetriever
+                                            .METADATA_KEY_ARTIST);
+
+                            if (value != null && !value.trim().isEmpty()) {
+                                item.put("artist", value.trim());
+                                changed = true;
+                            }
+                        }
+
+                        if (missingAlbum) {
+                            String value = metadataRetriever.extractMetadata(
+                                    android.media.MediaMetadataRetriever
+                                            .METADATA_KEY_ALBUM);
+
+                            if (value != null && !value.trim().isEmpty()) {
+                                item.put("album", value.trim());
+                                changed = true;
+                            }
+                        }
+
+                        if (missingDuration) {
+                            String value = metadataRetriever.extractMetadata(
+                                    android.media.MediaMetadataRetriever
+                                            .METADATA_KEY_DURATION);
+
+                            if (value != null && !value.trim().isEmpty()) {
+                                try {
+                                    long durationMs =
+                                            Long.parseLong(value.trim());
+
+                                    if (durationMs > 0L) {
+                                        long seconds =
+                                                Math.max(1L, durationMs / 1000L);
+
+                                        item.put("duration", seconds);
+                                        changed = true;
+                                    }
+                                } catch (NumberFormatException ignored) {
+                                }
+                            }
+                        }
+
+                    } catch (Exception e) {
+                        android.util.Log.w(
+                                "MusicDownloader",
+                                "No se pudieron recuperar metadatos Offline",
+                                e);
+
+                    } finally {
+                        try {
+                            metadataRetriever.release();
+                        } catch (Exception ignored) {
+                        }
+                    }
+
+                    item.put("metadata_scan_size_v1", currentSize);
+                    changed = true;
+                }
+            }
+
             synchronizedLibrary.put(item);
         }
 
