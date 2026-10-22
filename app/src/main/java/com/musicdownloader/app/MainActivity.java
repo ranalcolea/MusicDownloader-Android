@@ -510,6 +510,11 @@ private boolean playerMinimized = false;
     // Una busqueda de albumes no bloquea las imagenes de Spotify.
     private final ExecutorService albumCoverExecutor =
             Executors.newFixedThreadPool(3);
+
+    // ALBUM_CACHE_SEPARATE_EXECUTOR_V1
+    // Lecturas locales independientes de la red.
+    private final ExecutorService albumDiskCacheExecutor =
+            Executors.newFixedThreadPool(2);
     private final ExecutorService spotifyCoverExecutor =
             Executors.newFixedThreadPool(3);
     // Consultar el contenido de una lista no ocupa los hilos de imagen.
@@ -10047,16 +10052,42 @@ private void loadAlbumArtworkWithFallback(
             android.R.drawable.ic_menu_gallery
     );
 
-    coverExecutor.execute(() -> {
+    // ALBUM_CACHE_SEPARATE_EXECUTOR_V1
+    albumDiskCacheExecutor.execute(() -> {
 
         /*
          * Primero recuperar imagen local.
          * No hacemos ninguna peticion de red
          * cuando la portada ya existe.
          */
-        Bitmap bitmap =
+
+        Bitmap cachedBitmap =
                 readAlbumArtworkFromDisk(key);
 
+        if (cachedBitmap != null &&
+                !cachedBitmap.isRecycled()) {
+
+            synchronized (albumArtworkMemoryCache) {
+                albumArtworkMemoryCache.put(
+                        key, cachedBitmap
+                );
+            }
+
+            handler.post(() -> {
+                if (imageView.getTag() == requestKey &&
+                        !cachedBitmap.isRecycled()) {
+                    imageView.setImageBitmap(cachedBitmap);
+                }
+            });
+
+            return;
+        }
+
+        // Solo las portadas no guardadas utilizan
+        // los hilos de descarga por Internet.
+        coverExecutor.execute(() -> {
+
+        Bitmap bitmap = null;
         boolean downloaded = false;
 
         if (bitmap == null) {
@@ -10134,6 +10165,7 @@ private void loadAlbumArtworkWithFallback(
 
                 imageView.setImageBitmap(result);
             }
+        });
         });
     });
 }
@@ -24731,6 +24763,7 @@ private void updatePlayerUi() {
         executor.shutdownNow();
         artworkExecutor.shutdownNow();
         albumCoverExecutor.shutdownNow();
+        albumDiskCacheExecutor.shutdownNow();
         spotifyCoverExecutor.shutdownNow();
         spotifyHeaderLookupExecutor.shutdownNow();
         relatedSearchExecutor.shutdownNow();
