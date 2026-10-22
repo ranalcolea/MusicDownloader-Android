@@ -3113,6 +3113,9 @@ private boolean playerMinimized = false;
         });
 
         setContentView(fullScreenOverlay);
+
+        // BOTONES_FLOTANTES_GRUPO_MOVIBLE_V1
+        installMovableMinimizedControls(fullScreenOverlay);
     }
 
     /*
@@ -10034,17 +10037,11 @@ private void loadAlbumArtworkWithFallback(
      * Evita mostrar el icono estandar al volver
      * a construir la lista de albumes.
      */
-    Bitmap diskSaved = readAlbumArtworkFromDisk(key);
-
-    if (diskSaved != null && !diskSaved.isRecycled()) {
-
-        synchronized (albumArtworkMemoryCache) {
-            albumArtworkMemoryCache.put(key, diskSaved);
-        }
-
-        imageView.setImageBitmap(diskSaved);
-        return;
-    }
+    // ALBUM_DISK_CACHE_BACKGROUND_V1
+    // La memoria RAM se consulta arriba, sin esperas.
+    // La lectura del disco se realiza en coverExecutor,
+    // que ya la ejecuta antes de acceder a Internet.
+    // Evita descodificar imagenes en el hilo principal.
 
     imageView.setImageResource(
             android.R.drawable.ic_menu_gallery
@@ -23634,6 +23631,142 @@ private void loadFavoriteLocalCover(
             }
         });
     });
+}
+
+
+// BOTONES_FLOTANTES_GRUPO_MOVIBLE_V1
+// Mueve juntos los tres controles y el boton de restauracion.
+// No modifica sus OnClickListener ni el arrastre del reproductor.
+private void installMovableMinimizedControls(
+        android.widget.FrameLayout overlay) {
+
+    if (minimizedPlayerControls == null ||
+            restorePlayerButton == null) {
+        return;
+    }
+
+    final android.content.SharedPreferences prefs =
+            getPreferences(MODE_PRIVATE);
+
+    final String keyX = "floating_controls_group_x_v1";
+    final String keyY = "floating_controls_group_y_v1";
+
+    final android.view.View controls = minimizedPlayerControls;
+    final android.view.View restore = restorePlayerButton;
+
+    // Recuperar la posicion una vez calculado el tamaño de la pantalla.
+    overlay.post(() -> {
+        float x = prefs.getFloat(keyX, 0f);
+        float y = prefs.getFloat(keyY, 0f);
+
+        float left = Math.min(controls.getLeft(), restore.getLeft());
+        float right = Math.max(controls.getRight(), restore.getRight());
+        float top = Math.min(controls.getTop(), restore.getTop());
+        float bottom = Math.max(controls.getBottom(), restore.getBottom());
+
+        x = Math.max(-left,
+                Math.min(overlay.getWidth() - right, x));
+
+        y = Math.max(-top,
+                Math.min(overlay.getHeight() - bottom, y));
+
+        controls.setTranslationX(x);
+        controls.setTranslationY(y);
+        restore.setTranslationX(x);
+        restore.setTranslationY(y);
+    });
+
+    final int touchSlop =
+            android.view.ViewConfiguration.get(this)
+                    .getScaledTouchSlop();
+
+    android.view.View.OnTouchListener dragListener =
+            new android.view.View.OnTouchListener() {
+
+        float downX, downY;
+        float startX, startY;
+        boolean dragging;
+
+        @Override
+        public boolean onTouch(
+                android.view.View v,
+                android.view.MotionEvent event) {
+
+            switch (event.getActionMasked()) {
+
+                case android.view.MotionEvent.ACTION_DOWN:
+                    downX = event.getRawX();
+                    downY = event.getRawY();
+
+                    startX = controls.getTranslationX();
+                    startY = controls.getTranslationY();
+
+                    dragging = false;
+                    return true;
+
+                case android.view.MotionEvent.ACTION_MOVE:
+                    float dx = event.getRawX() - downX;
+                    float dy = event.getRawY() - downY;
+
+                    if (!dragging &&
+                            Math.hypot(dx, dy) > touchSlop) {
+                        dragging = true;
+                    }
+
+                    if (!dragging) {
+                        return true;
+                    }
+
+                    float left = Math.min(
+                            controls.getLeft(), restore.getLeft());
+                    float right = Math.max(
+                            controls.getRight(), restore.getRight());
+
+                    float top = Math.min(
+                            controls.getTop(), restore.getTop());
+                    float bottom = Math.max(
+                            controls.getBottom(), restore.getBottom());
+
+                    float x = Math.max(-left,
+                            Math.min(overlay.getWidth() - right,
+                                    startX + dx));
+
+                    float y = Math.max(-top,
+                            Math.min(overlay.getHeight() - bottom,
+                                    startY + dy));
+
+                    controls.setTranslationX(x);
+                    controls.setTranslationY(y);
+                    restore.setTranslationX(x);
+                    restore.setTranslationY(y);
+                    return true;
+
+                case android.view.MotionEvent.ACTION_UP:
+                    if (dragging) {
+                        prefs.edit()
+                                .putFloat(keyX, controls.getTranslationX())
+                                .putFloat(keyY, controls.getTranslationY())
+                                .apply();
+                    } else {
+                        v.performClick();
+                    }
+                    return true;
+
+                case android.view.MotionEvent.ACTION_CANCEL:
+                    return true;
+            }
+
+            return false;
+        }
+    };
+
+    // Los cuatro botones comparten el mismo movimiento.
+    for (int i = 0; i < minimizedPlayerControls.getChildCount(); i++) {
+        minimizedPlayerControls.getChildAt(i)
+                .setOnTouchListener(dragListener);
+    }
+
+    restorePlayerButton.setOnTouchListener(dragListener);
 }
 
 private void updatePlayerUi() {
