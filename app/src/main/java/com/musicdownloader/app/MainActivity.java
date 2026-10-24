@@ -18243,6 +18243,10 @@ exportifyButton.setOnLongClickListener(v -> {
                                 ""
                         );
 
+                // SPOTIFY_LIST_BADGE_V1: mantener los distintivos incluso sin Internet.
+                playlist.sourceType = item.optString("sourceType", "");
+                playlist.importOrigin = item.optString("importOrigin", "");
+
                 playlist.trackCount =
                         item.optInt(
                                 "trackCount",
@@ -18306,6 +18310,9 @@ exportifyButton.setOnLongClickListener(v -> {
                                     : ""
                     );
 
+                    // SPOTIFY_LIST_BADGE_V1: persistir procedencia local.
+                    item.put("sourceType", playlist.sourceType == null ? "" : playlist.sourceType);
+                    item.put("importOrigin", playlist.importOrigin == null ? "" : playlist.importOrigin);
                     item.put(
                             "trackCount",
                             playlist.trackCount
@@ -18381,7 +18388,9 @@ exportifyButton.setOnLongClickListener(v -> {
                             if (!java.util.Objects.equals(a.id, b.id)
                                     || !java.util.Objects.equals(a.name, b.name)
                                     || a.trackCount != b.trackCount
-                                    || !java.util.Objects.equals(a.url, b.url)) {
+                                    || !java.util.Objects.equals(a.url, b.url)
+                                    || !java.util.Objects.equals(a.sourceType, b.sourceType)
+                                    || !java.util.Objects.equals(a.importOrigin, b.importOrigin)) {
                                 same = false;
                                 break;
                             }
@@ -18405,6 +18414,28 @@ exportifyButton.setOnLongClickListener(v -> {
                 }
             }
         });
+    }
+
+    // SPOTIFY_LIST_BADGE_V1: distinguir sin adivinar el formato de archivos antiguos.
+    private String spotifyListOriginBadge(ApiClient.SpotifyPlaylist playlist) {
+        if (playlist == null) return "";
+        String original = playlist.importOrigin == null
+                ? "" : playlist.importOrigin.trim().toLowerCase(java.util.Locale.ROOT);
+        switch (original) {
+            case "csv": return "CSV";
+            case "txt": return "TXT";
+            case "json": return "JSON";
+            case "url": case "spotify_url": return "URL";
+            case "file": return "ARCH";
+        }
+        // Listas históricas: el servidor conoce el canal, NO la extensión del archivo.
+        String current = playlist.sourceType == null
+                ? "" : playlist.sourceType.trim().toLowerCase(java.util.Locale.ROOT);
+        if ("file".equals(current)) return "ARCH";
+        if ("spotify_url".equals(current)) return "URL";
+        if (playlist.url != null && playlist.url.startsWith("https://open.spotify.com/playlist/"))
+            return "URL";
+        return "";
     }
 
     private void showSpotifyLists(
@@ -18888,12 +18919,19 @@ fileButton.setText("📂 Archivo");
                         android.graphics.Typeface.DEFAULT,
                         android.graphics.Typeface.BOLD
                 );
+                // SPOTIFY_TITLE_MARQUEE_V1: el título largo se desliza
+                // solo dentro del ancho restante, sin tapar CSV/URL, lápiz ni X.
                 name.setSingleLine(true);
+                name.setHorizontallyScrolling(true);
                 name.setEllipsize(
-                        android.text.TextUtils.TruncateAt.END
+                        android.text.TextUtils.TruncateAt.MARQUEE
                 );
+                name.setMarqueeRepeatLimit(-1);
+                name.setSelected(true);  // No requiere pulsar ni dar foco.
 
-                info.addView(name);
+                info.addView(name, new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
 
                 TextView subtitle = new TextView(this);
 
@@ -18916,6 +18954,24 @@ fileButton.setText("📂 Archivo");
                         );
 
                 card.addView(info, infoParams);
+
+                // SPOTIFY_LIST_BADGE_V1: distintivo ANTES del lápiz y la X.
+                String badgeText = spotifyListOriginBadge(playlist);
+                if (!badgeText.isEmpty()) {
+                    TextView originBadge = new TextView(this);
+                    originBadge.setText(badgeText);
+                    originBadge.setTextSize(10);
+                    originBadge.setTextColor(Color.rgb(227, 222, 255));
+                    originBadge.setTypeface(null, android.graphics.Typeface.BOLD);
+                    originBadge.setGravity(Gravity.CENTER);
+                    originBadge.setContentDescription("Origen de lista: " + badgeText);
+                    originBadge.setBackground(roundedBackground(
+                            Color.rgb(49, 40, 68), Color.rgb(103, 83, 140), dp(10)));
+                    LinearLayout.LayoutParams badgeParams =
+                            new LinearLayout.LayoutParams(dp(46), dp(28));
+                    badgeParams.setMargins(dp(3), 0, 0, 0);
+                    card.addView(originBadge, badgeParams);
+                }
 
                 // SPOTIFY_CSV_URL_EDITOR_V2: editar justo al lado de la X.
                 TextView editLink = new TextView(this);

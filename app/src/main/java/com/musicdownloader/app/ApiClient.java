@@ -1158,6 +1158,10 @@ public class ApiClient {
                         "spotify_url"
                 );
 
+        // SPOTIFY_LIST_BADGE_V1: origen guardado y origen de importación.
+        playlist.sourceType = source.optString("source", "");
+        playlist.importOrigin = source.optString("import_origin", "");
+
         playlist.trackCount =
                 firstInt(
                         source,
@@ -1418,6 +1422,9 @@ public class ApiClient {
         public String id = "";
         public String name = "";
         public String url = "";
+        // SPOTIFY_LIST_BADGE_V1: valores entregados por el servidor.
+        public String sourceType = "";
+        public String importOrigin = "";
         public int trackCount = 0;
 
         public List<SpotifyTrack> tracks =
