@@ -344,6 +344,93 @@ public class PlayerService extends MediaSessionService {
     }
 
 
+    // BLUETOOTH_MEDIA_RESUME_V1
+    // Android elige qué app recibe PLAY; esto permite reanudar la nuestra
+    // cuando una orden del coche llegue a Music Downloader y el servicio
+    // haya sido cerrado. No interrumpe ni controla otras aplicaciones.
+    private static final String CAR_MEDIA_PREFS = "music_car_media_resume_v1";
+    private final android.os.Handler carMediaSaveHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable carMediaSaveTick = new Runnable() {
+        @Override public void run() {
+            saveCarMediaSnapshot();
+            carMediaSaveHandler.postDelayed(this, 15000L);
+        }
+    };
+
+    private void saveCarMediaSnapshot() {
+        if (player == null || player.getMediaItemCount() == 0) return;
+        int active = player.getCurrentMediaItemIndex();
+        if (active < 0) return;
+        try {
+            org.json.JSONArray tracks = new org.json.JSONArray();
+            int first = Math.max(0, active - 10);
+            int last = Math.min(player.getMediaItemCount(), first + 120);
+            int selectedSerialIndex = 0;
+            for (int i = first; i < last; i++) {
+                MediaItem item = player.getMediaItemAt(i);
+                if (item.localConfiguration == null || item.localConfiguration.uri == null)
+                    continue;
+                if (i == active) selectedSerialIndex = tracks.length();
+                org.json.JSONObject t = new org.json.JSONObject();
+                t.put("uri", item.localConfiguration.uri.toString());
+                t.put("id", item.mediaId);
+                t.put("title", item.mediaMetadata.title == null ? "" : item.mediaMetadata.title.toString());
+                t.put("artist", item.mediaMetadata.artist == null ? "" : item.mediaMetadata.artist.toString());
+                t.put("album", item.mediaMetadata.albumTitle == null ? "" : item.mediaMetadata.albumTitle.toString());
+                t.put("art", item.mediaMetadata.artworkUri == null ? "" : item.mediaMetadata.artworkUri.toString());
+                tracks.put(t);
+            }
+            if (tracks.length() == 0) return;
+            int newIndex = Math.min(selectedSerialIndex, tracks.length() - 1);
+            org.json.JSONObject snapshot = new org.json.JSONObject();
+            snapshot.put("tracks", tracks);
+            snapshot.put("index", Math.max(0, newIndex));
+            snapshot.put("position", Math.max(0L, player.getCurrentPosition()));
+            getSharedPreferences(CAR_MEDIA_PREFS, MODE_PRIVATE)
+                    .edit().putString("snapshot", snapshot.toString()).apply();
+        } catch (Exception error) {
+            android.util.Log.w("MusicDownloaderPlayer", "BT resumption cache", error);
+        }
+    }
+
+    private MediaSession.MediaItemsWithStartPosition restoreCarMediaSnapshot()
+            throws Exception {
+        String saved = getSharedPreferences(CAR_MEDIA_PREFS, MODE_PRIVATE)
+                .getString("snapshot", "");
+        if (saved.isEmpty()) throw new UnsupportedOperationException("Sin música anterior");
+        org.json.JSONObject snapshot = new org.json.JSONObject(saved);
+        org.json.JSONArray tracks = snapshot.optJSONArray("tracks");
+        if (tracks == null || tracks.length() == 0)
+            throw new UnsupportedOperationException("Sin elementos para reanudar");
+        List<MediaItem> items = new ArrayList<>();
+        for (int i = 0; i < tracks.length(); i++) {
+            org.json.JSONObject t = tracks.optJSONObject(i);
+            if (t == null) continue;
+            String uri = t.optString("uri", "");
+            if (uri.isEmpty()) continue;
+            androidx.media3.common.MediaMetadata.Builder meta =
+                    new androidx.media3.common.MediaMetadata.Builder()
+                            .setTitle(t.optString("title", ""))
+                            .setArtist(t.optString("artist", ""))
+                            .setAlbumTitle(t.optString("album", ""));
+            String artwork = t.optString("art", "");
+            if (!artwork.isEmpty()) {
+                try { meta.setArtworkUri(android.net.Uri.parse(artwork)); }
+                catch (Exception ignored) { }
+            }
+            MediaItem.Builder builder = new MediaItem.Builder()
+                    .setUri(android.net.Uri.parse(uri)).setMediaMetadata(meta.build());
+            String id = t.optString("id", "");
+            if (!id.isEmpty()) builder.setMediaId(id);
+            items.add(builder.build());
+        }
+        if (items.isEmpty()) throw new UnsupportedOperationException("Cola anterior no válida");
+        int index = Math.max(0, Math.min(items.size() - 1, snapshot.optInt("index", 0)));
+        long pos = Math.max(0L, snapshot.optLong("position", 0L));
+        return new MediaSession.MediaItemsWithStartPosition(items, index, pos);
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -378,6 +465,7 @@ public class PlayerService extends MediaSessionService {
                     int reason) {
                 cancelNetworkRecovery();
                 warmNextSpotifySong();
+                saveCarMediaSnapshot();
             }
 
             @Override
@@ -387,6 +475,7 @@ public class PlayerService extends MediaSessionService {
                 if (!playWhenReady) {
                     cancelNetworkRecovery();
                 }
+                saveCarMediaSnapshot();
             }
 
             @Override
@@ -401,6 +490,7 @@ public class PlayerService extends MediaSessionService {
                     androidx.media3.common.Timeline timeline,
                     int reason) {
                 warmNextSpotifySong();
+                saveCarMediaSnapshot();
             }
 
 
@@ -429,6 +519,7 @@ public class PlayerService extends MediaSessionService {
         });
 
         initializeNetworkRecovery();
+        carMediaSaveHandler.postDelayed(carMediaSaveTick, 15000L);
 
         Intent intent =
                 new Intent(
@@ -452,6 +543,20 @@ public class PlayerService extends MediaSessionService {
                 )
                         .setSessionActivity(pendingIntent)
                         .setCallback(new MediaSession.Callback() {
+
+                            @Override
+                            public ListenableFuture<MediaSession.MediaItemsWithStartPosition>
+                            onPlaybackResumption(MediaSession session,
+                                                 MediaSession.ControllerInfo controller) {
+                                try {
+                                    MediaSession.MediaItemsWithStartPosition restored =
+                                            restoreCarMediaSnapshot();
+                                    QueueRepository.setQueue(restored.mediaItems);
+                                    return Futures.immediateFuture(restored);
+                                } catch (Exception failure) {
+                                    return Futures.immediateFailedFuture(failure);
+                                }
+                            }
 
                             @Override
                             public MediaSession.ConnectionResult onConnect(
@@ -879,6 +984,8 @@ public class PlayerService extends MediaSessionService {
 
     @Override
     public void onDestroy() {
+        saveCarMediaSnapshot();
+        carMediaSaveHandler.removeCallbacks(carMediaSaveTick);
         cancelNetworkRecovery();
 
         if (networkManager != null && networkCallback != null) {

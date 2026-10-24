@@ -648,6 +648,46 @@ public class ApiClient {
         return parseSpotifyPlaylist(json);
     }
 
+    // SPOTIFY_PERSONAL_URL_V3: previsualización de URL, NO crea listas en servidor.
+    public SpotifyPlaylist previewSpotifyListUrl(String url) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("url", url);
+        return parseSpotifyPlaylist(new JSONObject(post("/api/spotify/url/preview", body)));
+    }
+
+    // SPOTIFY_CSV_URL_EDITOR_V2: guardar o quitar la URL de una lista ya importada.
+    public JSONObject updateSpotifyListUrl(String id, String url) throws Exception {
+        JSONObject data = new JSONObject();
+        data.put("id", id);
+        data.put("url", url == null ? "" : url.trim());
+        return new JSONObject(post("/api/spotify/list/url", data));
+    }
+
+    // SPOTIFY_CONFIRMAR_RECORTE_V4: aceptar solo el recorte mostrado en pantalla.
+    public JSONObject confirmSpotifyPartial(String id, String token) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("id", id);
+        body.put("confirmation_token", token);
+        return new JSONObject(post("/api/spotify/list/sync", body));
+    }
+
+    // SPOTIFY_URL_AUTO_SYNC_V1: refresco de listas vinculadas desde el servidor.
+    // SPOTIFY_ARCHIVO_LUEGO_URL_V8: archivo de Android actualiza la misma playlist.
+    public JSONObject spotifyV8SyncLocalFile(String id, String filename, String content)
+            throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("id", id);
+        body.put("filename", filename);
+        body.put("content", content);
+        return new JSONObject(post("/api/spotify/list/file/update", body));
+    }
+
+    public JSONObject syncSpotifyList(String id) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("id", id);
+        return new JSONObject(post("/api/spotify/list/sync", body));
+    }
+
     public void deleteSpotifyList(
             String id) throws Exception {
 

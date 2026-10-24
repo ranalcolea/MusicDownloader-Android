@@ -58,6 +58,15 @@
             </intent-filter>
         </service>
 
+        <!-- BLUETOOTH_MEDIA_RESUME_V1: únicamente atiende órdenes enviadas a esta app. -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
     </application>
 
 </manifest>
