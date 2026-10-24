@@ -18416,26 +18416,46 @@ exportifyButton.setOnLongClickListener(v -> {
         });
     }
 
-    // SPOTIFY_LIST_BADGE_V1: distinguir sin adivinar el formato de archivos antiguos.
+    // SPOTIFY_BADGE_RESTAURADO_V1
+    // Prioridad: formato importado, archivo vinculado, canal original.
+    // Un formato histórico desconocido se marca ARCH, nunca se inventa CSV.
     private String spotifyListOriginBadge(ApiClient.SpotifyPlaylist playlist) {
         if (playlist == null) return "";
-        String original = playlist.importOrigin == null
-                ? "" : playlist.importOrigin.trim().toLowerCase(java.util.Locale.ROOT);
-        switch (original) {
+
+        // Formato identificado manualmente para listas históricas sin metadatos.
+        String manuallySet = playlist.id == null ? ""
+                : spotifyV8Sources().getString("badge_" + playlist.id, "");
+        if ("CSV".equals(manuallySet) || "TXT".equals(manuallySet)
+                || "JSON".equals(manuallySet)) return manuallySet;
+
+        String origin = playlist.importOrigin == null ? ""
+                : playlist.importOrigin.trim().toLowerCase(java.util.Locale.ROOT);
+        switch (origin) {
             case "csv": return "CSV";
             case "txt": return "TXT";
             case "json": return "JSON";
             case "url": case "spotify_url": return "URL";
-            case "file": return "ARCH";
         }
-        // Listas históricas: el servidor conoce el canal, NO la extensión del archivo.
-        String current = playlist.sourceType == null
-                ? "" : playlist.sourceType.trim().toLowerCase(java.util.Locale.ROOT);
-        if ("file".equals(current)) return "ARCH";
-        if ("spotify_url".equals(current)) return "URL";
+
+        // SPOTIFY_ARCHIVO_LUEGO_URL_V8: recuperar extensión conocida del
+        // documento local vinculado, aunque al servidor le falte import_origin.
+        String linkedName = "";
+        if (playlist.id != null && !playlist.id.isEmpty()) {
+            linkedName = spotifyV8Sources().getString("name_" + playlist.id, "");
+        }
+        String low = linkedName == null ? ""
+                : linkedName.trim().toLowerCase(java.util.Locale.ROOT);
+        if (low.endsWith(".csv")) return "CSV";
+        if (low.endsWith(".txt")) return "TXT";
+        if (low.endsWith(".json")) return "JSON";
+
+        String source = playlist.sourceType == null ? ""
+                : playlist.sourceType.trim().toLowerCase(java.util.Locale.ROOT);
+        if ("spotify_url".equals(source) || "url".equals(source)) return "URL";
+        if ("file".equals(source) || "archivo".equals(source)) return "ARCH";
         if (playlist.url != null && playlist.url.startsWith("https://open.spotify.com/playlist/"))
             return "URL";
-        return "";
+        return "ARCH";
     }
 
     private void showSpotifyLists(
@@ -18971,6 +18991,22 @@ fileButton.setText("📂 Archivo");
                             new LinearLayout.LayoutParams(dp(46), dp(28));
                     badgeParams.setMargins(dp(3), 0, 0, 0);
                     card.addView(originBadge, badgeParams);
+                    if ("ARCH".equals(badgeText) && playlist.id != null) {
+                        originBadge.setContentDescription("Identificar formato original de " + playlist.name);
+                        originBadge.setOnClickListener(v -> new AlertDialog.Builder(this)
+                                .setTitle("Formato original de la lista")
+                                .setMessage("El servidor no conservó la extensión del archivo antiguo. "
+                                        + "Selecciona su formato real; no se modifican canciones.")
+                                .setItems(new String[]{"CSV", "TXT", "JSON"}, (dialog, index) -> {
+                                    String selected = new String[]{"CSV", "TXT", "JSON"}[index];
+                                    spotifyV8Sources().edit()
+                                            .putString("badge_" + playlist.id, selected).apply();
+                                    originBadge.setText(selected);
+                                    originBadge.setContentDescription("Origen de lista: " + selected);
+                                    originBadge.setOnClickListener(null);
+                                }).setNegativeButton("Cancelar", null).show());
+                    }
+
                 }
 
                 // SPOTIFY_CSV_URL_EDITOR_V2: editar justo al lado de la X.
